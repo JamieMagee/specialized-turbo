@@ -1,8 +1,7 @@
 """
-BLE connection management for Specialized Turbo bikes.
+BLE scanning and connection for Specialized Turbo bikes.
 
-Provides scanning (discovery) and a high-level async connection class
-built on top of ``bleak``.
+Wraps bleak to handle discovery, pairing, notifications, and request-read queries.
 """
 
 from __future__ import annotations
@@ -37,21 +36,10 @@ async def scan_for_bikes(
     timeout: float = 10.0,
 ) -> list[tuple[BLEDevice, AdvertisementData]]:
     """
-    Scan for Specialized Turbo bikes advertising via BLE.
+    Scan for Specialized Turbo bikes over BLE.
 
-    Returns a list of ``(device, advertisement_data)`` tuples for every
-    device whose manufacturer data contains the ``TURBOHMI`` magic bytes
-    under the Nordic Semiconductor company ID (0x0059).
-
-    Parameters
-    ----------
-    timeout : float
-        How long to scan, in seconds.
-
-    Returns
-    -------
-    list[tuple[BLEDevice, AdvertisementData]]
-        Discovered Specialized bikes.
+    Returns (device, advertisement_data) tuples for bikes that advertise
+    the TURBOHMI manufacturer data under Nordic's company ID (0x0059).
     """
     found: list[tuple[BLEDevice, AdvertisementData]] = []
 
@@ -75,21 +63,7 @@ async def find_bike_by_address(
     address: str,
     timeout: float = 10.0,
 ) -> BLEDevice | None:
-    """
-    Scan for a specific bike by its BLE MAC address.
-
-    Parameters
-    ----------
-    address : str
-        Target MAC address (e.g. ``"DC:DD:BB:4A:D6:55"``).
-    timeout : float
-        How long to scan, in seconds.
-
-    Returns
-    -------
-    BLEDevice | None
-        The device if found, else None.
-    """
+    """Scan for a specific bike by MAC address. Returns None if not found."""
     device = await BleakScanner.find_device_by_address(address, timeout=timeout)
     return device
 
@@ -107,13 +81,10 @@ class SpecializedConnection:
 
         async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin=946166) as conn:
             await conn.subscribe_notifications(my_callback)
-            await asyncio.sleep(30)  # receive data for 30 seconds
+            await asyncio.sleep(30)
 
-    The connection handles:
-    - Connecting to the bike
-    - Triggering BLE pairing (passkey / PIN entry)
-    - Subscribing to telemetry notifications
-    - Request-read queries for specific values
+    Handles connecting, BLE pairing (passkey entry), subscribing to
+    telemetry notifications, and request-read queries.
     """
 
     def __init__(
@@ -217,15 +188,7 @@ class SpecializedConnection:
         self,
         callback: Callable[[int, bytearray], None],
     ) -> None:
-        """
-        Subscribe to telemetry notifications from the bike.
-
-        Parameters
-        ----------
-        callback :
-            Called with ``(sender_handle, data)`` for each notification.
-            Typically you'd wrap this to call ``protocol.parse_message(data)``.
-        """
+        """Start receiving telemetry notifications. Callback gets (handle, data)."""
         assert self._client is not None, "Not connected"
         await self._client.start_notify(CHAR_NOTIFY, callback)
         self._notification_started = True
@@ -242,30 +205,11 @@ class SpecializedConnection:
 
     async def request_value(self, sender: int, channel: int) -> ParsedMessage:
         """
-        Actively query a specific value from the bike.
+        Query a specific value using the request-read pattern.
 
-        This follows the request-read pattern:
-        1. Write ``[sender, channel]`` to CHAR_REQUEST_WRITE
-        2. Read the response from CHAR_REQUEST_READ
-        3. Parse and return the result
-
-        .. note::
-           The reference implementation suggests unsubscribing from
-           notifications before performing request-read operations, as
-           they can interfere. Consider calling
-           ``unsubscribe_notifications()`` first if needed.
-
-        Parameters
-        ----------
-        sender : int
-            Sender byte (e.g. ``Sender.BATTERY``).
-        channel : int
-            Channel byte (e.g. ``BatteryChannel.CHARGE_PERCENT``).
-
-        Returns
-        -------
-        ParsedMessage
-            The decoded response.
+        Writes [sender, channel] to CHAR_REQUEST_WRITE, then reads the
+        response from CHAR_REQUEST_READ. You may need to unsubscribe
+        from notifications first, since they can interfere.
         """
         assert self._client is not None, "Not connected"
         request_bytes = build_request(sender, channel)

@@ -1,28 +1,15 @@
 # specialized-turbo
 
-Python library for communicating with **Specialized Turbo** e-bikes (Vado, Levo, Creo, etc.) over Bluetooth Low Energy.
+Read telemetry from Specialized Turbo e-bikes (Vado, Levo, Creo) over Bluetooth Low Energy. Speed, power, cadence, battery, motor temp, odometer, assist level -- all the data the Mission Control app sees, in Python.
 
-Implements the Gen 2 "TURBOHMI2017" BLE protocol as reverse-engineered by [Sepp62/LevoEsp32Ble](https://github.com/Sepp62/LevoEsp32Ble).
+Based on the Gen 2 "TURBOHMI2017" protocol, reverse-engineered by [Sepp62/LevoEsp32Ble](https://github.com/Sepp62/LevoEsp32Ble).
 
-## Features
-
-- **Scan** for nearby Specialized Turbo bikes
-- **Connect** with BLE pairing (passkey/PIN support)
-- **Stream** real-time telemetry: speed, power, cadence, battery, motor temp, odometer, assist level
-- **Query** specific values on demand
-- **CLI** for quick access from the terminal
-- Fully **async** (built on [bleak](https://github.com/hbldh/bleak))
-- Comprehensive **protocol documentation** in [docs/protocol.md](docs/protocol.md)
+Uses [bleak](https://github.com/hbldh/bleak) for BLE, async throughout. Includes a CLI. Full protocol docs in [docs/protocol.md](docs/protocol.md).
 
 ## Installation
 
 ```bash
-pip install -e .
-```
-
-Or with CLI support:
-```bash
-pip install -e ".[cli]"
+pip install specialized-turbo
 ```
 
 ## Quick Start
@@ -45,7 +32,9 @@ async def main():
 asyncio.run(main())
 ```
 
-### Access the Snapshot
+### Access the snapshot
+
+Instead of streaming, you can just read the snapshot after collecting for a bit:
 
 ```python
 async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin=946166) as conn:
@@ -61,7 +50,7 @@ async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin=946166) as conn:
     print(f"Assist: {snap.motor.assist_level}")
 ```
 
-### Query a Specific Value
+### Query a specific value
 
 ```python
 from specialized_turbo import SpecializedConnection, Sender, BatteryChannel
@@ -71,16 +60,16 @@ async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin=946166) as conn:
     print(f"Battery: {msg.converted_value}%")
 ```
 
-## CLI Usage
+## CLI
 
-### Scan for bikes
+Scan for bikes:
 
 ```bash
 specialized-turbo scan
 specialized-turbo scan --timeout 15
 ```
 
-### Stream telemetry
+Stream telemetry:
 
 ```bash
 specialized-turbo telemetry DC:DD:BB:4A:D6:55 --pin 946166
@@ -88,7 +77,7 @@ specialized-turbo telemetry DC:DD:BB:4A:D6:55 --pin 946166 --format json
 specialized-turbo telemetry DC:DD:BB:4A:D6:55 --pin 946166 --duration 30
 ```
 
-### Read a specific value
+Read a single value:
 
 ```bash
 specialized-turbo read list                                    # show available fields
@@ -96,16 +85,16 @@ specialized-turbo read battery_charge_percent DC:DD:BB:4A:D6:55 --pin 946166
 specialized-turbo read speed DC:DD:BB:4A:D6:55 --pin 946166 --format json
 ```
 
-### Debug: enumerate GATT services
+Dump GATT services (for debugging):
 
 ```bash
 specialized-turbo services DC:DD:BB:4A:D6:55 --pin 946166
 ```
 
-## Available Telemetry Fields
+## Available fields
 
 | Field | Unit | Description |
-|---|---|---|
+| --- | --- | --- |
 | `battery_capacity_wh` | Wh | Total battery capacity |
 | `battery_remaining_wh` | Wh | Remaining energy |
 | `battery_health` | % | Battery health |
@@ -129,24 +118,19 @@ specialized-turbo services DC:DD:BB:4A:D6:55 --pin 946166
 
 ## Pairing
 
-The bike requires a **6-digit PIN** for BLE pairing, displayed on the bike's TCU (Turbo Connect Unit) screen. Pass it via `--pin` on the CLI or the `pin=` parameter in Python.
+The bike needs a 6-digit PIN for BLE pairing, shown on its TCU screen. Pass it via `--pin` (CLI) or `pin=` (Python).
 
-**On Windows:** bleak uses the WinRT backend which supports programmatic passkey pairing. If that fails, pair manually via Windows Bluetooth Settings first, then connect without the `--pin` flag.
+On Windows, bleak's WinRT backend can handle passkey pairing programmatically. If that doesn't work, pair through Windows Bluetooth Settings first, then connect without `--pin`.
 
-## Protocol Documentation
+## Protocol docs
 
-See [docs/protocol.md](docs/protocol.md) for the complete reverse-engineered protocol reference, including:
-- UUID structure and all service/characteristic definitions
-- Message format and byte-level encoding
-- All data fields with conversion formulas and example hex values
-- Authentication flow
-- Communication patterns (notifications, request-read, write commands)
+See [docs/protocol.md](docs/protocol.md) for the full protocol reference: UUIDs, message format, field definitions with conversion formulas, authentication, and communication patterns.
 
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-pytest
+uv sync --extra dev
+uv run pytest
 ```
 
 ## License
@@ -155,4 +139,4 @@ MIT
 
 ## Credits
 
-Protocol reverse-engineered by [Sepp62/LevoEsp32Ble](https://github.com/Sepp62/LevoEsp32Ble) (C++/ESP32, MIT license). This Python implementation is an independent port.
+Protocol reverse-engineered by [Sepp62/LevoEsp32Ble](https://github.com/Sepp62/LevoEsp32Ble) (C++/ESP32, MIT).

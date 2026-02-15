@@ -1,5 +1,5 @@
 """
-specialized_turbo — Python library for Specialized Turbo e-bike BLE communication.
+specialized_turbo -- talk to Specialized Turbo e-bikes over BLE.
 
 Quick start::
 

@@ -1,8 +1,8 @@
 """
-Real-time telemetry monitoring for Specialized Turbo bikes.
+Telemetry monitoring for Specialized Turbo bikes.
 
-Subscribes to BLE notifications, decodes each message, and maintains
-a live ``TelemetrySnapshot``. Supports callbacks and async iteration.
+Subscribes to BLE notifications, decodes them, and keeps a running
+TelemetrySnapshot. Supports callbacks and async iteration.
 """
 
 from __future__ import annotations
@@ -21,7 +21,13 @@ logger = logging.getLogger(__name__)
 
 class TelemetryMonitor:
     """
-    High-level telemetry stream from a Specialized Turbo bike.
+    Streams telemetry from a connected Specialized Turbo bike.
+
+    Three ways to consume data:
+
+    1. Read ``monitor.snapshot`` at any time for the latest state.
+    2. Set ``monitor.on_update`` to a callback.
+    3. Iterate with ``async for msg in monitor.stream():``
 
     Usage::
 
@@ -29,22 +35,10 @@ class TelemetryMonitor:
             monitor = TelemetryMonitor(conn)
             await monitor.start()
 
-            # Option A: poll the snapshot
-            print(monitor.snapshot.motor.speed_kmh)
-
-            # Option B: register a callback
-            monitor.on_update = lambda msg, snap: print(snap.as_dict())
-
-            # Option C: async iterate
             async for msg in monitor.stream():
                 print(f"{msg.field_name} = {msg.converted_value} {msg.unit}")
 
             await monitor.stop()
-
-    Parameters
-    ----------
-    connection : SpecializedConnection
-        An established BLE connection to the bike.
     """
 
     def __init__(self, connection: SpecializedConnection) -> None:
@@ -95,12 +89,7 @@ class TelemetryMonitor:
             yield msg
 
     def _notification_handler(self, sender_handle: int, data: bytearray) -> None:
-        """
-        Internal callback invoked by bleak for each BLE notification.
-
-        Parses the raw bytes, updates the snapshot, fires ``on_update``,
-        and enqueues the message for ``stream()`` consumers.
-        """
+        """Called by bleak for each notification. Parses, updates snapshot, notifies consumers."""
         try:
             msg = parse_message(data)
         except Exception:
@@ -140,25 +129,9 @@ async def run_telemetry_session(
     output_callback: Callable[[str], None] | None = None,
 ) -> TelemetrySnapshot:
     """
-    Convenience function: connect, stream telemetry, and return snapshot.
+    Connect, print telemetry for a while, and return the final snapshot.
 
-    Parameters
-    ----------
-    address : str
-        BLE MAC address of the bike.
-    pin : int | None
-        Pairing PIN.
-    duration : float
-        How long to collect data (seconds). 0 = run until interrupted.
-    output_format : str
-        ``"table"`` for human-readable lines, ``"json"`` for JSON per update.
-    output_callback :
-        Called with each formatted output line. Defaults to ``print``.
-
-    Returns
-    -------
-    TelemetrySnapshot
-        Final aggregated state.
+    Set duration=0 to run until Ctrl+C. output_format is "table" or "json".
     """
     printer = output_callback or print
 

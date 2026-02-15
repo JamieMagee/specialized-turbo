@@ -1,28 +1,28 @@
-# Specialized Turbo BLE Protocol Reference
+# Specialized Turbo BLE protocol reference
 
-> **Protocol generation:** Gen 2 — "TURBOHMI2017"
-> **Applicable models:** Specialized Turbo Vado, Levo, Creo, and other Turbo models with TCU (2017+)
-> **Based on:** [Sepp62/LevoEsp32Ble](https://github.com/Sepp62/LevoEsp32Ble) (MIT license)
+> Protocol generation: Gen 2, "TURBOHMI2017"  
+> Applicable models: Specialized Turbo Vado, Levo, Creo, and other Turbo models with TCU (2017+)  
+> Based on: [Sepp62/LevoEsp32Ble](https://github.com/Sepp62/LevoEsp32Ble) (MIT license)
 
 ---
 
 ## 1. Overview
 
-Specialized Turbo e-bikes communicate over Bluetooth Low Energy (BLE) using a proprietary GATT protocol. The bike acts as a **GATT server** (peripheral) and the client (phone/computer) connects as a **GATT client** (central).
+Specialized Turbo e-bikes use a proprietary BLE GATT protocol. The bike is the GATT server (peripheral) and your phone or computer connects as the client (central).
 
-The protocol supports three communication patterns:
+There are three communication patterns:
 
-1. **Notifications** (passive) — the bike continuously pushes telemetry data
-2. **Request-Read** (active query) — the client requests a specific value
-3. **Write** (commands) — the client changes settings (assist level, etc.)
+1. Notifications (passive): the bike pushes telemetry continuously
+2. Request-read (active query): the client asks for a specific value
+3. Write (commands): the client changes settings like assist level
 
 ---
 
-## 2. BLE Discovery
+## 2. BLE discovery
 
-### Advertising Data
+### Advertising data
 
-The bike advertises using **Nordic Semiconductor** (company ID `0x0059`) manufacturer-specific data containing the ASCII string `"TURBOHMI"`:
+The bike advertises using Nordic Semiconductor's company ID (`0x0059`) with manufacturer-specific data containing the ASCII string `"TURBOHMI"`:
 
 | Field | Value |
 | --- | --- |
@@ -38,7 +38,7 @@ Company ID: 59 00
 Payload:    54 55 52 42 4f 48 4d 49 32 30 31 37 01 00 00 00 00
 ```
 
-### Detection Algorithm
+### Detection algorithm
 
 ```python
 def is_specialized_bike(manufacturer_data: dict[int, bytes]) -> bool:
@@ -48,9 +48,9 @@ def is_specialized_bike(manufacturer_data: dict[int, bytes]) -> bool:
 
 ---
 
-## 3. UUID Structure
+## 3. UUID structure
 
-All service and characteristic UUIDs share a common 128-bit base:
+All service and characteristic UUIDs share a 128-bit base:
 
 ```plain
 000000xx-3731-3032-494d-484f42525554
@@ -81,15 +81,15 @@ The last 12 bytes (`3731-3032-494d-484f42525554`) decode as ASCII:
 
 ---
 
-## 4. Authentication & Pairing
+## 4. Authentication and pairing
 
-### Security Requirements
+### Security requirements
 
 - **MITM protection** enabled
 - **Secure Connections** enabled
 - **IO capability:** Keyboard + Display (passkey entry)
 
-### Pairing Flow
+### Pairing flow
 
 1. Client connects to the bike via BLE
 2. Client attempts to **read** the notification characteristic (`0x0013`)
@@ -98,7 +98,7 @@ The last 12 bytes (`3731-3032-494d-484f42525554`) decode as ASCII:
 5. Client enters this PIN to complete pairing
 6. Subsequent connections may use bonded keys (implementation-dependent)
 
-### Connection Parameters
+### Connection parameters
 
 The bike requests:
 
@@ -108,9 +108,9 @@ The bike requests:
 
 ---
 
-## 5. Message Format
+## 5. Message format
 
-All notifications, request-read responses, and write commands use the same basic structure:
+All messages (notifications, read responses, write commands) use the same structure:
 
 ```plain
 [sender: 1 byte] [channel: 1 byte] [data: 1–4 bytes]
@@ -119,9 +119,9 @@ All notifications, request-read responses, and write commands use the same basic
 - **Sender** identifies the subsystem (battery, motor, settings)
 - **Channel** identifies the specific data field within that subsystem
 - **Data** is in **little-endian** byte order
-- Maximum observed message length: 20 bytes (BLE ATT MTU constraint)
+- Maximum observed length: 20 bytes (BLE ATT MTU)
 
-### Integer Extraction (Little-Endian)
+### Integer extraction (little-endian)
 
 | Size | Formula |
 | --- | --- |
@@ -143,9 +143,9 @@ All notifications, request-read responses, and write commands use the same basic
 
 ---
 
-## 7. Data Fields
+## 7. Data fields
 
-### 7.1 Battery (Sender `0x00` / `0x04`)
+### 7.1 Battery (sender 0x00 / 0x04)
 
 | Channel | Name | Size | Conversion | Unit | Example Hex | Example Value |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -160,7 +160,7 @@ All notifications, request-read responses, and write commands use the same basic
 
 > **Note:** Voltage/current conversion formulas may be approximate.
 
-### 7.2 Motor / Rider (Sender `0x01`)
+### 7.2 Motor / rider (sender 0x01)
 
 | Channel | Name | Size | Conversion | Unit | Example Hex | Example Value |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -183,7 +183,7 @@ All notifications, request-read responses, and write commands use the same basic
 | 2 | TRAIL |
 | 3 | TURBO |
 
-### 7.3 Bike Settings (Sender `0x02`)
+### 7.3 Bike settings (sender 0x02)
 
 | Channel | Name | Size | Conversion | Unit | Example Hex | Example Value |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -198,29 +198,29 @@ All notifications, request-read responses, and write commands use the same basic
 
 ---
 
-## 8. Communication Patterns
+## 8. Communication patterns
 
-### 8.1 Notifications (Passive Telemetry)
+### 8.1 Notifications (passive telemetry)
 
-1. Subscribe to notifications on characteristic `0x0013` (service `0x0003`)
-2. The bike continuously sends messages as data changes
-3. Parse each notification using the message format above
-4. Notifications include data from all senders — battery, motor, and settings
+1. Subscribe to notifications on characteristic 0x0013 (service 0x0003)
+2. The bike sends messages as data changes
+3. Parse each one using the message format above
+4. You'll get data from all senders: battery, motor, and settings
 
-### 8.2 Request-Read (Active Query)
+### 8.2 Request-read (active query)
 
-To explicitly query a specific value:
+To query a specific value:
 
-1. **Write** 2 bytes `[sender, channel]` to characteristic `0x0021` (service `0x0001`)
-2. **Read** the response from characteristic `0x0011` (service `0x0001`)
-3. The response follows the standard message format: `[sender, channel, data...]`
-4. Verify the first 2 bytes match your request
+1. Write 2 bytes `[sender, channel]` to characteristic 0x0021 (service 0x0001)
+2. Read the response from characteristic 0x0011 (service 0x0001)
+3. Response follows the standard format: `[sender, channel, data...]`
+4. Check the first 2 bytes match your request
 
-**Important:** The reference implementation suggests unsubscribing from notifications before performing request-read operations, as they can interfere on the same connection.
+The reference implementation unsubscribes from notifications before doing request-read, since they can interfere on the same connection.
 
-### 8.3 Write Commands
+### 8.3 Write commands
 
-Write command bytes to characteristic `0x0012` (service `0x0002`).
+Write command bytes to characteristic 0x0012 (service 0x0002).
 
 #### Set Assist Level
 
@@ -261,21 +261,21 @@ value: 0–100
 
 ---
 
-## 9. Known Quirks
+## 9. Known quirks
 
-1. **Message `0x02 0x27`**: An undocumented message that, when received, causes a brief pause in notifications. The reference implementation uses this window to perform an async read of battery capacity.
+1. Message 0x02 0x27: undocumented, but when it arrives, notifications pause briefly. The reference code uses this window to do an async read of battery capacity.
 
-2. **Notification interference**: Request-read operations should be performed while notifications are paused to avoid response corruption.
+2. Request-read interference: do request-read operations while notifications are paused to avoid garbled responses.
 
-3. **Voltage/Current formulas**: The conversions `÷5+20` (voltage) and `÷5` (current) are noted as potentially approximate in the reference implementation.
+3. Voltage/current formulas: the conversions (raw/5+20 for voltage, raw/5 for current) are noted as approximate in the reference implementation.
 
-4. **Battery Wh factor**: The `×1.1111` conversion factor for battery Wh values is specific to the battery pack configuration and may differ across models.
+4. Battery Wh factor: the 1.1111 multiplier for Wh values may vary across battery pack configurations.
 
-5. **Bonding**: The reference ESP32 implementation does not implement BLE bonding (`BLE_SM_PAIR_AUTHREQ_BOND` is commented out), requiring re-pairing on each connection.
+5. Bonding: the reference ESP32 code doesn't implement BLE bonding (the flag is commented out), so it re-pairs every time.
 
 ---
 
-## 10. Protocol Generations
+## 10. Protocol generations
 
 There is an older protocol generation used by ~2015 Specialized bikes:
 

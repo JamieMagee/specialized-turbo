@@ -1,8 +1,8 @@
 """
-Data models for Specialized Turbo bike telemetry.
+Data models for bike telemetry.
 
-Provides mutable dataclass containers that accumulate decoded BLE messages
-into a coherent snapshot of the bike's state.
+Mutable dataclass containers that accumulate decoded BLE messages
+into a snapshot of the bike's current state.
 """
 
 from __future__ import annotations
@@ -180,11 +180,10 @@ class BikeSettings:
 @dataclass
 class TelemetrySnapshot:
     """
-    Aggregated view of all bike telemetry, updated incrementally as
-    BLE notifications arrive.
+    All bike telemetry in one place, updated as BLE notifications come in.
 
-    This is the main object you interact with — it collects data from
-    all senders into a single coherent state.
+    Each notification updates the relevant sub-model (battery, motor, settings).
+    Read fields directly off .battery, .motor, etc.
     """
 
     battery: BatteryState = field(default_factory=BatteryState)
@@ -196,14 +195,7 @@ class TelemetrySnapshot:
     unknown_messages: list[ParsedMessage] = field(default_factory=list, repr=False)
 
     def update_from_message(self, msg: ParsedMessage) -> None:
-        """
-        Route a parsed BLE message to the appropriate sub-model.
-
-        Parameters
-        ----------
-        msg : ParsedMessage
-            A message decoded by ``protocol.parse_message()``.
-        """
+        """Route a parsed message to the right sub-model."""
         self.last_updated = time.monotonic()
         self.message_count += 1
 

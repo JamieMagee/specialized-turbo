@@ -1,12 +1,9 @@
 """
-Specialized Turbo BLE Protocol Definition (Gen 2 — "TURBOHMI2017")
+Specialized Turbo BLE protocol (Gen 2, "TURBOHMI2017").
 
-This module defines the BLE service/characteristic UUIDs, message format,
-sender/channel enums, and parsing logic for the Specialized Turbo e-bike
-Bluetooth Low Energy protocol.
-
-Protocol reverse-engineered from the Sepp62/LevoEsp32Ble project (MIT).
-UUID base encodes "TURBOHMI2017" in reverse ASCII in its lower bytes.
+UUIDs, message format, enums, and parsing. Ported from the
+Sepp62/LevoEsp32Ble C++ project (MIT). The UUID base has
+"TURBOHMI2017" encoded backwards in its lower bytes.
 """
 
 from __future__ import annotations
@@ -25,7 +22,7 @@ UUID_BASE = "0000{:04x}-3731-3032-494d-484f42525554"
 
 
 def _uuid(short: int) -> str:
-    """Expand a 16-bit short UUID into the full Specialized 128-bit UUID string."""
+    """Expand a short UUID into the full 128-bit Specialized UUID."""
     return UUID_BASE.format(short)
 
 
@@ -52,7 +49,7 @@ ADVERTISING_MAGIC = b"TURBOHMI"
 
 
 class Sender(IntEnum):
-    """Identifies the subsystem that produced a message."""
+    """Which subsystem sent the message."""
 
     BATTERY = 0x00
     MOTOR = 0x01  # Motor / rider data
@@ -100,7 +97,7 @@ class BikeSettingsChannel(IntEnum):
 
 
 class AssistLevel(IntEnum):
-    """Assist mode enum — written or read via MotorChannel.ASSIST_LEVEL."""
+    """Write or read via MotorChannel.ASSIST_LEVEL."""
 
     OFF = 0
     ECO = 1
@@ -114,7 +111,7 @@ class AssistLevel(IntEnum):
 
 
 def _int_from_bytes(data: bytes, offset: int, size: int) -> int:
-    """Extract a little-endian unsigned integer of *size* bytes starting at *offset*."""
+    """Extract a little-endian unsigned int of *size* bytes at *offset*."""
     return int.from_bytes(
         data[offset : offset + size], byteorder="little", signed=False
     )
@@ -225,7 +222,7 @@ def all_field_defs() -> dict[tuple[int, int], FieldDefinition]:
 
 
 class ParsedMessage(NamedTuple):
-    """Result of parsing a single BLE notification or read-response."""
+    """A decoded BLE notification or read-response."""
 
     sender: int
     channel: int
@@ -237,26 +234,11 @@ class ParsedMessage(NamedTuple):
 
 def parse_message(data: bytes | bytearray) -> ParsedMessage:
     """
-    Parse a raw BLE notification/read payload into a structured result.
+    Parse raw bytes from CHAR_NOTIFY or CHAR_REQUEST_READ.
 
-    The message format is::
+    Format: [sender: 1B] [channel: 1B] [data: 1-4B little-endian]
 
-        [sender: 1B] [channel: 1B] [data: 1-4B little-endian]
-
-    Parameters
-    ----------
-    data : bytes
-        Raw bytes received from the CHAR_NOTIFY or CHAR_REQUEST_READ characteristic.
-
-    Returns
-    -------
-    ParsedMessage
-        Decoded message with raw and converted values.
-
-    Raises
-    ------
-    ValueError
-        If data is too short (< 3 bytes).
+    Raises ValueError if data is shorter than 3 bytes.
     """
     if len(data) < 3:
         raise ValueError(f"Message too short ({len(data)} bytes), need at least 3")
@@ -293,18 +275,10 @@ def parse_message(data: bytes | bytearray) -> ParsedMessage:
 
 def is_specialized_advertisement(manufacturer_data: dict[int, bytes]) -> bool:
     """
-    Check whether BLE advertisement manufacturer data belongs to a Specialized Turbo bike.
+    Check if BLE manufacturer data belongs to a Specialized Turbo bike.
 
-    Parameters
-    ----------
-    manufacturer_data : dict[int, bytes]
-        Mapping of company ID → manufacturer-specific data bytes,
-        as returned by ``bleak.backends.scanner.AdvertisementData.manufacturer_data``.
-
-    Returns
-    -------
-    bool
-        True if the data contains the TURBOHMI magic bytes under the Nordic company ID.
+    Looks for the TURBOHMI magic bytes under Nordic's company ID (0x0059)
+    in the manufacturer_data dict from bleak's AdvertisementData.
     """
     payload = manufacturer_data.get(NORDIC_COMPANY_ID)
     if payload is None:
@@ -315,13 +289,10 @@ def is_specialized_advertisement(manufacturer_data: dict[int, bytes]) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Command builders (read-only focus, but included for completeness)
+# Command builders
 # ---------------------------------------------------------------------------
 
 
 def build_request(sender: int, channel: int) -> bytes:
-    """
-    Build the 2-byte payload to write to CHAR_REQUEST_WRITE
-    in order to query a specific field value.
-    """
+    """Build the 2-byte query payload for CHAR_REQUEST_WRITE."""
     return bytes([sender, channel])
