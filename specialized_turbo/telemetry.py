@@ -12,6 +12,8 @@ import json
 import logging
 from typing import AsyncIterator, Callable
 
+from bleak.backends.characteristic import BleakGATTCharacteristic
+
 from .connection import SpecializedConnection
 from .models import TelemetrySnapshot
 from .protocol import parse_message, ParsedMessage
@@ -88,7 +90,9 @@ class TelemetryMonitor:
                 break
             yield msg
 
-    def _notification_handler(self, sender_handle: int, data: bytearray) -> None:
+    def _notification_handler(
+        self, characteristic: BleakGATTCharacteristic, data: bytearray
+    ) -> None:
         """Called by bleak for each notification. Parses, updates snapshot, notifies consumers."""
         try:
             msg = parse_message(data)

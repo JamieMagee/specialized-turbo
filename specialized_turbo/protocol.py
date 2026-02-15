@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import NamedTuple
+from typing import Callable, NamedTuple
 
 # ---------------------------------------------------------------------------
 # UUID definitions
@@ -110,7 +110,7 @@ class AssistLevel(IntEnum):
 # ---------------------------------------------------------------------------
 
 
-def _int_from_bytes(data: bytes, offset: int, size: int) -> int:
+def _int_from_bytes(data: bytes | bytearray, offset: int, size: int) -> int:
     """Extract a little-endian unsigned int of *size* bytes at *offset*."""
     return int.from_bytes(
         data[offset : offset + size], byteorder="little", signed=False
@@ -132,7 +132,7 @@ class FieldDefinition:
     name: str
     unit: str
     data_size: int  # bytes of payload (after sender+channel)
-    convert: object  # callable(int) -> float | int
+    convert: Callable[[int], float | int]
 
     @property
     def key(self) -> tuple[int, int]:

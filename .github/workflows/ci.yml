@@ -49,3 +49,6 @@ jobs:
 
       - name: Lint
         run: uvx ruff check .
+
+      - name: Type check
+        run: uvx ty check

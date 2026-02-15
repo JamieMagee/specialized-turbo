@@ -11,6 +11,7 @@ import logging
 from typing import Any, Callable
 
 from bleak import BleakClient, BleakScanner
+from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
@@ -186,9 +187,9 @@ class SpecializedConnection:
 
     async def subscribe_notifications(
         self,
-        callback: Callable[[int, bytearray], None],
+        callback: Callable[[BleakGATTCharacteristic, bytearray], None],
     ) -> None:
-        """Start receiving telemetry notifications. Callback gets (handle, data)."""
+        """Start receiving telemetry notifications. Callback gets (characteristic, data)."""
         assert self._client is not None, "Not connected"
         await self._client.start_notify(CHAR_NOTIFY, callback)
         self._notification_started = True
