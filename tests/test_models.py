@@ -15,7 +15,6 @@ from specialized_turbo.protocol import (
     BatteryChannel,
     BikeSettingsChannel,
     MotorChannel,
-    Sender,
     parse_message,
 )
 
@@ -138,7 +137,9 @@ class TestTelemetrySnapshot:
         snap = TelemetrySnapshot()
         snap.update_from_message(parse_message(bytes.fromhex("000c34")))  # battery 52%
         snap.update_from_message(parse_message(bytes.fromhex("0102fa00")))  # speed 25
-        snap.update_from_message(parse_message(bytes.fromhex("01050200")))  # assist TRAIL
+        snap.update_from_message(
+            parse_message(bytes.fromhex("01050200"))
+        )  # assist TRAIL
 
         d = snap.as_dict()
         assert d["battery"]["charge_pct"] == 52
@@ -156,24 +157,24 @@ class TestTelemetrySnapshot:
         """Simulate a realistic sequence of messages."""
         snap = TelemetrySnapshot()
         messages = [
-            "0000c201",    # battery capacity 500 Wh
-            "0001e400",    # battery remaining 253 Wh
-            "000264",      # battery health 100%
-            "000313",      # battery temp 19°C
-            "00040d00",    # charge cycles 13
-            "000550",      # voltage 36.0 V
-            "000600",      # current 0 A
-            "000c34",      # charge 52%
-            "0100c800",    # rider power 200 W
-            "01012c03",    # cadence 81.2 RPM
-            "0102fa00",    # speed 25.0 km/h
-            "01050200",    # assist TRAIL
-            "010719",      # motor temp 25°C
-            "010c6400",    # motor power 100 W
-            "0200fc08",    # wheel circ 2300 mm
-            "02030a",      # assist lev1 10%
-            "020414",      # assist lev2 20%
-            "020532",      # assist lev3 50%
+            "0000c201",  # battery capacity 500 Wh
+            "0001e400",  # battery remaining 253 Wh
+            "000264",  # battery health 100%
+            "000313",  # battery temp 19°C
+            "00040d00",  # charge cycles 13
+            "000550",  # voltage 36.0 V
+            "000600",  # current 0 A
+            "000c34",  # charge 52%
+            "0100c800",  # rider power 200 W
+            "01012c03",  # cadence 81.2 RPM
+            "0102fa00",  # speed 25.0 km/h
+            "01050200",  # assist TRAIL
+            "010719",  # motor temp 25°C
+            "010c6400",  # motor power 100 W
+            "0200fc08",  # wheel circ 2300 mm
+            "02030a",  # assist lev1 10%
+            "020414",  # assist lev2 20%
+            "020532",  # assist lev3 50%
         ]
 
         for hex_data in messages:

@@ -19,9 +19,6 @@ from .protocol import (
     CHAR_NOTIFY,
     CHAR_REQUEST_READ,
     CHAR_REQUEST_WRITE,
-    CHAR_WRITE,
-    NORDIC_COMPANY_ID,
-    ADVERTISING_MAGIC,
     build_request,
     is_specialized_advertisement,
     parse_message,
@@ -36,7 +33,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-async def scan_for_bikes(timeout: float = 10.0) -> list[tuple[BLEDevice, AdvertisementData]]:
+async def scan_for_bikes(
+    timeout: float = 10.0,
+) -> list[tuple[BLEDevice, AdvertisementData]]:
     """
     Scan for Specialized Turbo bikes advertising via BLE.
 
@@ -60,7 +59,9 @@ async def scan_for_bikes(timeout: float = 10.0) -> list[tuple[BLEDevice, Adverti
         if is_specialized_advertisement(adv.manufacturer_data):
             # Avoid duplicates
             if not any(d.address == device.address for d, _ in found):
-                logger.info("Found Specialized bike: %s (%s)", device.name, device.address)
+                logger.info(
+                    "Found Specialized bike: %s (%s)", device.name, device.address
+                )
                 found.append((device, adv))
 
     scanner = BleakScanner(detection_callback=_detection_callback)
@@ -168,13 +169,19 @@ class SpecializedConnection:
             logger.debug("Triggering pairing by reading CHAR_NOTIFY ...")
             await self._client.read_gatt_char(CHAR_NOTIFY)
         except Exception as exc:
-            logger.debug("Initial read raised %s (expected during pairing): %s", type(exc).__name__, exc)
+            logger.debug(
+                "Initial read raised %s (expected during pairing): %s",
+                type(exc).__name__,
+                exc,
+            )
 
         # Attempt explicit pairing if a PIN was provided
         if self._pin is not None:
             try:
                 logger.info("Requesting pairing with PIN %d ...", self._pin)
-                paired = await self._client.pair(protection_level=2)  # 2 = EncryptionAndAuthentication
+                paired = await self._client.pair(
+                    protection_level=2
+                )  # 2 = EncryptionAndAuthentication
                 logger.info("Pair result: %s", paired)
             except NotImplementedError:
                 logger.warning(
@@ -276,7 +283,10 @@ class SpecializedConnection:
         if msg.sender != sender or msg.channel != channel:
             logger.warning(
                 "Response mismatch: requested (%02x, %02x), got (%02x, %02x)",
-                sender, channel, msg.sender, msg.channel,
+                sender,
+                channel,
+                msg.sender,
+                msg.channel,
             )
         return msg
 

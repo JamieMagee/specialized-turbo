@@ -12,19 +12,13 @@ import argparse
 import asyncio
 import json
 import logging
-import signal
 import sys
 
 from .connection import scan_for_bikes, SpecializedConnection
-from .models import TelemetrySnapshot
 from .protocol import (
-    Sender,
-    BatteryChannel,
-    MotorChannel,
-    BikeSettingsChannel,
     all_field_defs,
 )
-from .telemetry import TelemetryMonitor, run_telemetry_session
+from .telemetry import run_telemetry_session
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -111,12 +105,14 @@ async def _cmd_read(args: argparse.Namespace) -> None:
         print("Available fields:\n")
         for name, (sender, channel) in sorted(_FIELD_NAME_MAP.items()):
             fd = all_field_defs()[(sender, channel)]
-            print(f"  {name:<28s}  (sender=0x{sender:02x} channel=0x{channel:02x})  [{fd.unit}]")
+            print(
+                f"  {name:<28s}  (sender=0x{sender:02x} channel=0x{channel:02x})  [{fd.unit}]"
+            )
         return
 
     if field_name not in _FIELD_NAME_MAP:
         print(f"Unknown field: {field_name}")
-        print(f"Use 'read list' to see available fields.")
+        print("Use 'read list' to see available fields.")
         sys.exit(1)
 
     sender, channel = _FIELD_NAME_MAP[field_name]
@@ -125,12 +121,17 @@ async def _cmd_read(args: argparse.Namespace) -> None:
     async with SpecializedConnection(args.address, pin=args.pin) as conn:
         msg = await conn.request_value(sender, channel)
         if args.format == "json":
-            print(json.dumps({
-                "field": msg.field_name,
-                "value": msg.converted_value,
-                "raw": msg.raw_value,
-                "unit": msg.unit,
-            }, default=str))
+            print(
+                json.dumps(
+                    {
+                        "field": msg.field_name,
+                        "value": msg.converted_value,
+                        "raw": msg.raw_value,
+                        "unit": msg.unit,
+                    },
+                    default=str,
+                )
+            )
         else:
             print(f"{msg.field_name} = {msg.converted_value} {msg.unit}")
 
@@ -152,7 +153,7 @@ async def _cmd_services(args: argparse.Namespace) -> None:
             except Exception as e:
                 print(f"Pairing note: {e}")
 
-        print(f"Connected. Enumerating services ...\n")
+        print("Connected. Enumerating services ...\n")
         for service in client.services:
             print(f"Service: {service.uuid}  [{service.description}]")
             for char in service.characteristics:
@@ -179,17 +180,27 @@ def main(argv: list[str] | None = None) -> None:
 
     # --- scan ---
     p_scan = sub.add_parser("scan", help="Scan for nearby Specialized bikes")
-    p_scan.add_argument("-t", "--timeout", type=float, default=10.0, help="Scan duration (seconds)")
+    p_scan.add_argument(
+        "-t", "--timeout", type=float, default=10.0, help="Scan duration (seconds)"
+    )
 
     # --- telemetry ---
     p_tel = sub.add_parser("telemetry", help="Stream live telemetry")
     p_tel.add_argument("address", help="BLE MAC address (e.g. DC:DD:BB:4A:D6:55)")
     p_tel.add_argument("-p", "--pin", type=int, default=None, help="Pairing PIN")
-    p_tel.add_argument("-d", "--duration", type=float, default=0, help="Duration in seconds (0=forever)")
+    p_tel.add_argument(
+        "-d",
+        "--duration",
+        type=float,
+        default=0,
+        help="Duration in seconds (0=forever)",
+    )
     p_tel.add_argument("-f", "--format", choices=["table", "json"], default="table")
 
     # --- read ---
-    p_read = sub.add_parser("read", help="Read a specific value (use 'read list' to see fields)")
+    p_read = sub.add_parser(
+        "read", help="Read a specific value (use 'read list' to see fields)"
+    )
     p_read.add_argument("field", help="Field name or 'list'")
     p_read.add_argument("address", nargs="?", default=None, help="BLE MAC address")
     p_read.add_argument("-p", "--pin", type=int, default=None, help="Pairing PIN")

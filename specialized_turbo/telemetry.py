@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 from typing import AsyncIterator, Callable
 
 from .connection import SpecializedConnection
@@ -105,7 +104,9 @@ class TelemetryMonitor:
         try:
             msg = parse_message(data)
         except Exception:
-            logger.warning("Failed to parse notification: %s", data.hex(), exc_info=True)
+            logger.warning(
+                "Failed to parse notification: %s", data.hex(), exc_info=True
+            )
             return
 
         self._snapshot.update_from_message(msg)

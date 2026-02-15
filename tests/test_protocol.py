@@ -13,8 +13,6 @@ from specialized_turbo.protocol import (
     MotorChannel,
     BikeSettingsChannel,
     Sender,
-    FieldDefinition,
-    ParsedMessage,
     _uuid,
     all_field_defs,
     build_request,
@@ -82,19 +80,27 @@ class TestUUIDs:
 class TestFieldDefs:
     def test_all_battery_channels_registered(self):
         for ch in BatteryChannel:
-            assert get_field_def(Sender.BATTERY, ch) is not None, f"Missing: BATTERY/{ch.name}"
+            assert get_field_def(Sender.BATTERY, ch) is not None, (
+                f"Missing: BATTERY/{ch.name}"
+            )
 
     def test_all_motor_channels_registered(self):
         for ch in MotorChannel:
-            assert get_field_def(Sender.MOTOR, ch) is not None, f"Missing: MOTOR/{ch.name}"
+            assert get_field_def(Sender.MOTOR, ch) is not None, (
+                f"Missing: MOTOR/{ch.name}"
+            )
 
     def test_all_settings_channels_registered(self):
         for ch in BikeSettingsChannel:
-            assert get_field_def(Sender.BIKE_SETTINGS, ch) is not None, f"Missing: SETTINGS/{ch.name}"
+            assert get_field_def(Sender.BIKE_SETTINGS, ch) is not None, (
+                f"Missing: SETTINGS/{ch.name}"
+            )
 
     def test_secondary_battery_channels_registered(self):
         for ch in BatteryChannel:
-            assert get_field_def(Sender.BATTERY_2, ch) is not None, f"Missing: BATTERY_2/{ch.name}"
+            assert get_field_def(Sender.BATTERY_2, ch) is not None, (
+                f"Missing: BATTERY_2/{ch.name}"
+            )
 
     def test_field_def_returns_none_for_unknown(self):
         assert get_field_def(0xFF, 0xFF) is None
