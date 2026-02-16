@@ -17,22 +17,30 @@ Four-layer design — each module has a single responsibility:
 
 ## Key conventions
 
-- **`from __future__ import annotations`** in every module — use PEP 604 union syntax (`X | None`) everywhere.
+- **`from __future__ import annotations`** in every source module — use PEP 604 union syntax (`X | None`) everywhere.
 - **Enums use `IntEnum`** so they double as ints in protocol bytes. `AssistLevel`, `Sender`, `BatteryChannel`, etc.
 - **`ParsedMessage` is a `NamedTuple`**, not a dataclass — keep it immutable.
-- **State models are mutable dataclasses** with `field(default_factory=...)` for the `_CHANNEL_MAP`. All fields default to `None`; `as_dict()` excludes `None` values.
-- **Channel routing pattern:** each sub-model's `_CHANNEL_MAP` maps channel int → attribute name string; `update()` calls `setattr()`. Follow this pattern when adding new fields.
+- **`FieldDefinition` is a frozen, slotted dataclass** — stored in `_FIELD_DEFS`, created by `_reg()`.
+- **State models are mutable dataclasses.** All fields default to `None`; `as_dict()` excludes `None` values. Enum-valued fields (e.g., `AssistLevel`) must convert to `.name` string in `as_dict()`.
+- **`_CHANNEL_MAP` is a `ClassVar`** (class-level dict literal), not a per-instance field. Maps channel int → attribute name string; `update()` calls `setattr()`.
 - **Hex test vectors** from the protocol spec drive all parser tests. Format: `bytes.fromhex("000c34")`. Always include the expected raw value and converted value.
+- **mypy strict mode** — `[tool.mypy] strict = true`. All new code must pass strict type checking: explicit return types, no `Any` leaks.
+- **PEP 561 typed package** — `py.typed` marker is present. Maintain type annotations in all modules.
+- **Public API via `__init__.py`** — re-export with the `X as X` idiom and add to `__all__`. Version lives in `__version__` (read by hatch for builds).
+- **Logging:** `logger = logging.getLogger(__name__)` at module top level. CLI configures output via `_setup_logging()`.
+- **Error patterns:** `ValueError` for protocol violations, `RuntimeError` for connection state violations, silent `warning`-level logging for non-fatal notification parse failures.
 
 ## Adding a new telemetry field
 
 1. Add the channel to the appropriate `IntEnum` in `protocol.py` (e.g., `MotorChannel`).
-2. Register with `_reg(sender, channel, name, unit, data_size, convert)` in `protocol.py`.
+2. Register with `_reg(sender, channel, name, unit, data_size, convert)` in `protocol.py`. Note: battery channels on sender 0x00 are **auto-duplicated** for secondary battery (sender 0x04) — no manual duplication needed.
 3. Add the attribute (typed `X | None = None`) to the matching dataclass in `models.py`.
 4. Add the channel → attribute mapping in that model's `_CHANNEL_MAP`.
-5. Include the attribute in `as_dict()`.
-6. Add parse tests in `tests/test_protocol.py` using hex test vectors from the protocol spec.
-7. Add model routing tests in `tests/test_models.py`.
+5. Include the attribute in `as_dict()`. If enum-valued, convert to `.name` string.
+6. If it's a new public enum/type, re-export in `__init__.py` with `X as X` and add to `__all__`.
+7. Add parse tests in `tests/test_protocol.py` using hex test vectors from the protocol spec.
+8. Update the field count assertion in `TestFieldDefs.test_all_field_defs_count`.
+9. Add model routing tests in `tests/test_models.py`.
 
 ## BLE protocol essentials
 
@@ -55,8 +63,11 @@ uv run pytest           # Run tests (pytest-asyncio with asyncio_mode = "auto")
 ## Testing patterns
 
 - Tests are in `tests/`, organized as classes by component (`TestParseBattery`, `TestMotorState`, etc.).
+- **Self-contained** — no `conftest.py` or shared fixtures. Each test creates its instances inline.
 - Use `pytest.approx()` for any floating-point conversions (cadence, speed, voltage, acceleration).
+- **Annotate test vectors** with inline comments showing raw→converted math.
 - Test unknown/edge cases: unknown senders return `field_name=None`, messages < 3 bytes raise `ValueError`.
+- **Regression guard:** `test_all_field_defs_count` asserts the total number of registered fields.
 - No BLE hardware needed — tests exercise `protocol.py` and `models.py` only (pure logic).
 
 ## CLI
