@@ -105,7 +105,7 @@ class MotorState:
         return False
 
     def as_dict(self) -> dict[str, Any]:
-        assist = self.assist_level
+        assist: str | int | None = self.assist_level
         if isinstance(assist, AssistLevel):
             assist = assist.name
         return {

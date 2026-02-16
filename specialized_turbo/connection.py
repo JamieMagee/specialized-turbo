@@ -151,10 +151,10 @@ class SpecializedConnection:
         if self._pin is not None:
             try:
                 logger.info("Requesting pairing with PIN %d ...", self._pin)
-                paired = await self._client.pair(
+                await self._client.pair(
                     protection_level=2
                 )  # 2 = EncryptionAndAuthentication
-                logger.info("Pair result: %s", paired)
+                logger.info("Pairing completed")
             except NotImplementedError:
                 logger.warning(
                     "bleak backend does not support programmatic pairing. "

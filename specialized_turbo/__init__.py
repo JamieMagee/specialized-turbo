@@ -19,42 +19,42 @@ Quick start::
 
 from .protocol import (
     # UUIDs
-    SERVICE_DATA_NOTIFY,
-    SERVICE_DATA_REQUEST,
-    SERVICE_DATA_WRITE,
-    CHAR_NOTIFY,
-    CHAR_REQUEST_READ,
-    CHAR_REQUEST_WRITE,
-    CHAR_WRITE,
+    SERVICE_DATA_NOTIFY as SERVICE_DATA_NOTIFY,
+    SERVICE_DATA_REQUEST as SERVICE_DATA_REQUEST,
+    SERVICE_DATA_WRITE as SERVICE_DATA_WRITE,
+    CHAR_NOTIFY as CHAR_NOTIFY,
+    CHAR_REQUEST_READ as CHAR_REQUEST_READ,
+    CHAR_REQUEST_WRITE as CHAR_REQUEST_WRITE,
+    CHAR_WRITE as CHAR_WRITE,
     # Enums
-    Sender,
-    BatteryChannel,
-    MotorChannel,
-    BikeSettingsChannel,
-    AssistLevel,
+    Sender as Sender,
+    BatteryChannel as BatteryChannel,
+    MotorChannel as MotorChannel,
+    BikeSettingsChannel as BikeSettingsChannel,
+    AssistLevel as AssistLevel,
     # Parsing
-    parse_message,
-    ParsedMessage,
-    FieldDefinition,
-    get_field_def,
-    all_field_defs,
-    build_request,
-    is_specialized_advertisement,
+    parse_message as parse_message,
+    ParsedMessage as ParsedMessage,
+    FieldDefinition as FieldDefinition,
+    get_field_def as get_field_def,
+    all_field_defs as all_field_defs,
+    build_request as build_request,
+    is_specialized_advertisement as is_specialized_advertisement,
 )
 from .models import (
-    BatteryState,
-    MotorState,
-    BikeSettings,
-    TelemetrySnapshot,
+    BatteryState as BatteryState,
+    MotorState as MotorState,
+    BikeSettings as BikeSettings,
+    TelemetrySnapshot as TelemetrySnapshot,
 )
 from .connection import (
-    SpecializedConnection,
-    scan_for_bikes,
-    find_bike_by_address,
+    SpecializedConnection as SpecializedConnection,
+    scan_for_bikes as scan_for_bikes,
+    find_bike_by_address as find_bike_by_address,
 )
 from .telemetry import (
-    TelemetryMonitor,
-    run_telemetry_session,
+    TelemetryMonitor as TelemetryMonitor,
+    run_telemetry_session as run_telemetry_session,
 )
 
 __all__ = [

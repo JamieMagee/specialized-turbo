@@ -140,7 +140,12 @@ class FieldDefinition:
 
 
 def _reg(
-    sender: int, channel: int, name: str, unit: str, size: int, convert=None
+    sender: int,
+    channel: int,
+    name: str,
+    unit: str,
+    size: int,
+    convert: Callable[[int], float | int] | None = None,
 ) -> FieldDefinition:
     if convert is None:
         convert = lambda v: v  # noqa: E731  identity

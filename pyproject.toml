@@ -45,3 +45,6 @@ path = "specialized_turbo/__init__.py"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
