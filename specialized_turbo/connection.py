@@ -190,7 +190,8 @@ class SpecializedConnection:
         callback: Callable[[BleakGATTCharacteristic, bytearray], None],
     ) -> None:
         """Start receiving telemetry notifications. Callback gets (characteristic, data)."""
-        assert self._client is not None, "Not connected"
+        if self._client is None:
+            raise RuntimeError("Not connected")
         await self._client.start_notify(CHAR_NOTIFY, callback)
         self._notification_started = True
         logger.info("Subscribed to telemetry notifications")
@@ -212,7 +213,8 @@ class SpecializedConnection:
         response from CHAR_REQUEST_READ. You may need to unsubscribe
         from notifications first, since they can interfere.
         """
-        assert self._client is not None, "Not connected"
+        if self._client is None:
+            raise RuntimeError("Not connected")
         request_bytes = build_request(sender, channel)
         logger.debug("Request-write: %s", request_bytes.hex())
         await self._client.write_gatt_char(CHAR_REQUEST_WRITE, request_bytes)

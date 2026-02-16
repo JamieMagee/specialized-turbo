@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "specialized-turbo"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Python library for communicating with Specialized Turbo e-bikes over Bluetooth Low Energy"
 readme = "README.md"
 license = "MIT"
@@ -28,7 +28,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cli = ["click>=8.0"]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
 
 [project.scripts]
@@ -39,6 +38,9 @@ Homepage = "https://github.com/JamieMagee/specialized-turbo"
 Repository = "https://github.com/JamieMagee/specialized-turbo"
 Issues = "https://github.com/JamieMagee/specialized-turbo/issues"
 Documentation = "https://github.com/JamieMagee/specialized-turbo/blob/main/docs/protocol.md"
+
+[tool.hatch.version]
+path = "specialized_turbo/__init__.py"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

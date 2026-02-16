@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from .protocol import (
     AssistLevel,
@@ -34,19 +34,16 @@ class BatteryState:
     current_a: float | None = None
     charge_pct: int | None = None
 
-    _CHANNEL_MAP: dict[int, str] = field(
-        default_factory=lambda: {
-            BatteryChannel.SIZE_WH: "capacity_wh",
-            BatteryChannel.REMAIN_WH: "remaining_wh",
-            BatteryChannel.HEALTH: "health_pct",
-            BatteryChannel.TEMP: "temp_c",
-            BatteryChannel.CHARGE_CYCLES: "charge_cycles",
-            BatteryChannel.VOLTAGE: "voltage_v",
-            BatteryChannel.CURRENT: "current_a",
-            BatteryChannel.CHARGE_PERCENT: "charge_pct",
-        },
-        repr=False,
-    )
+    _CHANNEL_MAP: ClassVar[dict[int, str]] = {
+        BatteryChannel.SIZE_WH: "capacity_wh",
+        BatteryChannel.REMAIN_WH: "remaining_wh",
+        BatteryChannel.HEALTH: "health_pct",
+        BatteryChannel.TEMP: "temp_c",
+        BatteryChannel.CHARGE_CYCLES: "charge_cycles",
+        BatteryChannel.VOLTAGE: "voltage_v",
+        BatteryChannel.CURRENT: "current_a",
+        BatteryChannel.CHARGE_PERCENT: "charge_pct",
+    }
 
     def update(self, channel: int, value: Any) -> bool:
         """Update a field from a parsed message. Returns True if field was known."""
@@ -87,20 +84,17 @@ class MotorState:
     peak_assist: tuple[int, int, int] | None = None
     shuttle: int | None = None
 
-    _CHANNEL_MAP: dict[int, str] = field(
-        default_factory=lambda: {
-            MotorChannel.RIDER_POWER: "rider_power_w",
-            MotorChannel.CADENCE: "cadence_rpm",
-            MotorChannel.SPEED: "speed_kmh",
-            MotorChannel.ODOMETER: "odometer_km",
-            MotorChannel.ASSIST_LEVEL: "assist_level",
-            MotorChannel.MOTOR_TEMP: "motor_temp_c",
-            MotorChannel.MOTOR_POWER: "motor_power_w",
-            MotorChannel.PEAK_ASSIST: "peak_assist",
-            MotorChannel.SHUTTLE: "shuttle",
-        },
-        repr=False,
-    )
+    _CHANNEL_MAP: ClassVar[dict[int, str]] = {
+        MotorChannel.RIDER_POWER: "rider_power_w",
+        MotorChannel.CADENCE: "cadence_rpm",
+        MotorChannel.SPEED: "speed_kmh",
+        MotorChannel.ODOMETER: "odometer_km",
+        MotorChannel.ASSIST_LEVEL: "assist_level",
+        MotorChannel.MOTOR_TEMP: "motor_temp_c",
+        MotorChannel.MOTOR_POWER: "motor_power_w",
+        MotorChannel.PEAK_ASSIST: "peak_assist",
+        MotorChannel.SHUTTLE: "shuttle",
+    }
 
     def update(self, channel: int, value: Any) -> bool:
         """Update a field from a parsed message. Returns True if field was known."""
@@ -142,17 +136,14 @@ class BikeSettings:
     fake_channel: int | None = None
     acceleration_pct: float | None = None
 
-    _CHANNEL_MAP: dict[int, str] = field(
-        default_factory=lambda: {
-            BikeSettingsChannel.WHEEL_CIRCUMFERENCE: "wheel_circumference_mm",
-            BikeSettingsChannel.ASSIST_LEV1: "assist_lev1_pct",
-            BikeSettingsChannel.ASSIST_LEV2: "assist_lev2_pct",
-            BikeSettingsChannel.ASSIST_LEV3: "assist_lev3_pct",
-            BikeSettingsChannel.FAKE_CHANNEL: "fake_channel",
-            BikeSettingsChannel.ACCELERATION: "acceleration_pct",
-        },
-        repr=False,
-    )
+    _CHANNEL_MAP: ClassVar[dict[int, str]] = {
+        BikeSettingsChannel.WHEEL_CIRCUMFERENCE: "wheel_circumference_mm",
+        BikeSettingsChannel.ASSIST_LEV1: "assist_lev1_pct",
+        BikeSettingsChannel.ASSIST_LEV2: "assist_lev2_pct",
+        BikeSettingsChannel.ASSIST_LEV3: "assist_lev3_pct",
+        BikeSettingsChannel.FAKE_CHANNEL: "fake_channel",
+        BikeSettingsChannel.ACCELERATION: "acceleration_pct",
+    }
 
     def update(self, channel: int, value: Any) -> bool:
         """Update a field from a parsed message. Returns True if field was known."""

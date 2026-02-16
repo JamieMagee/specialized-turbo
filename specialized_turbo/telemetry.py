@@ -47,7 +47,7 @@ class TelemetryMonitor:
         self._conn = connection
         self._snapshot = TelemetrySnapshot()
         self._running = False
-        self._queue: asyncio.Queue[ParsedMessage] = asyncio.Queue()
+        self._queue: asyncio.Queue[ParsedMessage | None] = asyncio.Queue()
         self.on_update: Callable[[ParsedMessage, TelemetrySnapshot], None] | None = None
         """Optional callback invoked after each notification is processed."""
 
@@ -75,7 +75,7 @@ class TelemetryMonitor:
         self._running = False
         await self._conn.unsubscribe_notifications()
         # Unblock any waiting stream consumers
-        await self._queue.put(None)  # type: ignore[arg-type]
+        await self._queue.put(None)
         logger.info("TelemetryMonitor stopped")
 
     async def stream(self) -> AsyncIterator[ParsedMessage]:
@@ -118,10 +118,7 @@ class TelemetryMonitor:
             except Exception:
                 logger.warning("on_update callback raised", exc_info=True)
 
-        try:
-            self._queue.put_nowait(msg)
-        except asyncio.QueueFull:
-            pass  # drop oldest if consumer is too slow
+        self._queue.put_nowait(msg)
 
 
 async def run_telemetry_session(
