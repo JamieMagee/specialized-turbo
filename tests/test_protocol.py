@@ -456,11 +456,15 @@ class TestGen1Advertising:
 
     def test_detect_generation_gen1(self):
         payload = bytes.fromhex("028657" + "ff" * 24)
-        assert detect_generation({SIMPLO_COMPANY_ID: payload}) == ProtocolGeneration.GEN_1
+        assert (
+            detect_generation({SIMPLO_COMPANY_ID: payload}) == ProtocolGeneration.GEN_1
+        )
 
     def test_detect_generation_gen2(self):
         payload = bytes.fromhex("545552424f484d493230313701000000")
-        assert detect_generation({NORDIC_COMPANY_ID: payload}) == ProtocolGeneration.GEN_2
+        assert (
+            detect_generation({NORDIC_COMPANY_ID: payload}) == ProtocolGeneration.GEN_2
+        )
 
     def test_detect_generation_unknown(self):
         assert detect_generation({}) is None
@@ -469,10 +473,11 @@ class TestGen1Advertising:
     def test_gen1_with_serial_number_payload(self):
         """Real Gen 1 manufacturer data from a 2018 Turbo Levo."""
         payload = bytes.fromhex(
-            "02865701433937323732"
-            "2D313033303331373330333830382D322D30303538"
+            "028657014339373237322D313033303331373330333830382D322D30303538"
         )
-        assert detect_generation({SIMPLO_COMPANY_ID: payload}) == ProtocolGeneration.GEN_1
+        assert (
+            detect_generation({SIMPLO_COMPANY_ID: payload}) == ProtocolGeneration.GEN_1
+        )
 
 
 # ======================================================================

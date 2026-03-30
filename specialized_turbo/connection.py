@@ -16,12 +16,8 @@ from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
 from .protocol import (
-    CHAR_NOTIFY,
-    CHAR_REQUEST_READ,
-    CHAR_REQUEST_WRITE,
     ProtocolGeneration,
     build_request,
-    detect_generation,
     get_char_notify,
     get_char_request_read,
     get_char_request_write,
