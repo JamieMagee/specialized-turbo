@@ -18,7 +18,7 @@ Quick start::
 """
 
 from .protocol import (
-    # UUIDs
+    # UUIDs (Gen 2 defaults)
     SERVICE_DATA_NOTIFY as SERVICE_DATA_NOTIFY,
     SERVICE_DATA_REQUEST as SERVICE_DATA_REQUEST,
     SERVICE_DATA_WRITE as SERVICE_DATA_WRITE,
@@ -26,6 +26,22 @@ from .protocol import (
     CHAR_REQUEST_READ as CHAR_REQUEST_READ,
     CHAR_REQUEST_WRITE as CHAR_REQUEST_WRITE,
     CHAR_WRITE as CHAR_WRITE,
+    # Gen 1 UUIDs
+    SERVICE_DATA_NOTIFY_GEN1 as SERVICE_DATA_NOTIFY_GEN1,
+    SERVICE_DATA_REQUEST_GEN1 as SERVICE_DATA_REQUEST_GEN1,
+    SERVICE_DATA_WRITE_GEN1 as SERVICE_DATA_WRITE_GEN1,
+    CHAR_NOTIFY_GEN1 as CHAR_NOTIFY_GEN1,
+    CHAR_REQUEST_READ_GEN1 as CHAR_REQUEST_READ_GEN1,
+    CHAR_REQUEST_WRITE_GEN1 as CHAR_REQUEST_WRITE_GEN1,
+    CHAR_WRITE_GEN1 as CHAR_WRITE_GEN1,
+    # Generation-aware UUID helpers
+    ProtocolGeneration as ProtocolGeneration,
+    get_uuid as get_uuid,
+    get_char_notify as get_char_notify,
+    get_char_request_read as get_char_request_read,
+    get_char_request_write as get_char_request_write,
+    get_char_write as get_char_write,
+    detect_generation as detect_generation,
     # Enums
     Sender as Sender,
     BatteryChannel as BatteryChannel,
@@ -40,6 +56,9 @@ from .protocol import (
     all_field_defs as all_field_defs,
     build_request as build_request,
     is_specialized_advertisement as is_specialized_advertisement,
+    # Company IDs
+    NORDIC_COMPANY_ID as NORDIC_COMPANY_ID,
+    SIMPLO_COMPANY_ID as SIMPLO_COMPANY_ID,
 )
 from .models import (
     BatteryState as BatteryState,
@@ -58,7 +77,7 @@ from .telemetry import (
 )
 
 __all__ = [
-    # Protocol
+    # Protocol — Gen 2 UUIDs (backward-compatible defaults)
     "SERVICE_DATA_NOTIFY",
     "SERVICE_DATA_REQUEST",
     "SERVICE_DATA_WRITE",
@@ -66,11 +85,29 @@ __all__ = [
     "CHAR_REQUEST_READ",
     "CHAR_REQUEST_WRITE",
     "CHAR_WRITE",
+    # Protocol — Gen 1 UUIDs
+    "SERVICE_DATA_NOTIFY_GEN1",
+    "SERVICE_DATA_REQUEST_GEN1",
+    "SERVICE_DATA_WRITE_GEN1",
+    "CHAR_NOTIFY_GEN1",
+    "CHAR_REQUEST_READ_GEN1",
+    "CHAR_REQUEST_WRITE_GEN1",
+    "CHAR_WRITE_GEN1",
+    # Protocol — generation-aware helpers
+    "ProtocolGeneration",
+    "get_uuid",
+    "get_char_notify",
+    "get_char_request_read",
+    "get_char_request_write",
+    "get_char_write",
+    "detect_generation",
+    # Enums
     "Sender",
     "BatteryChannel",
     "MotorChannel",
     "BikeSettingsChannel",
     "AssistLevel",
+    # Parsing
     "parse_message",
     "ParsedMessage",
     "FieldDefinition",
@@ -78,6 +115,9 @@ __all__ = [
     "all_field_defs",
     "build_request",
     "is_specialized_advertisement",
+    # Company IDs
+    "NORDIC_COMPANY_ID",
+    "SIMPLO_COMPANY_ID",
     # Models
     "BatteryState",
     "MotorState",
@@ -92,4 +132,4 @@ __all__ = [
     "run_telemetry_session",
 ]
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"

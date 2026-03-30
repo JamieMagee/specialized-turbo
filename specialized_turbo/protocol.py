@@ -1,30 +1,72 @@
 """
-Specialized Turbo BLE protocol (Gen 2, "TURBOHMI2017").
+Specialized Turbo BLE protocol.
 
 UUIDs, message format, enums, and parsing. Ported from the
-Sepp62/LevoEsp32Ble C++ project (MIT). The UUID base has
-"TURBOHMI2017" encoded backwards in its lower bytes.
+Sepp62/LevoEsp32Ble C++ project (MIT).
+
+Supports two protocol generations:
+- Gen 2 ("TURBOHMI2017"): Vado/Levo/Creo 2019+, Nordic manufacturer ID
+- Gen 1 ("GIGATRONIK"): Levo 2018, Simplo manufacturer ID
+
+Both generations share the same message format and field definitions;
+only the BLE UUIDs and advertisement data differ.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import IntEnum
+from enum import IntEnum, StrEnum
 from typing import Callable, NamedTuple
+
+# ---------------------------------------------------------------------------
+# Protocol generation
+# ---------------------------------------------------------------------------
+
+
+class ProtocolGeneration(StrEnum):
+    """BLE protocol generation for Specialized Turbo bikes."""
+
+    GEN_1 = "gen1"  # 2018 Levo (Gigatronik TCU, Simplo mfr ID)
+    GEN_2 = "gen2"  # 2019+ Vado/Levo/Creo (TURBOHMI2017, Nordic mfr ID)
+
 
 # ---------------------------------------------------------------------------
 # UUID definitions
 # ---------------------------------------------------------------------------
 
-# Base UUID: 000000xx-3731-3032-494d-484f42525554
+# Gen 2 base UUID: 000000xx-3731-3032-494d-484f42525554
 # Last 12 bytes = "7102IMHOBRUT" = reverse of "TURBOHMI2017"
-UUID_BASE = "0000{:04x}-3731-3032-494d-484f42525554"
+GEN2_UUID_BASE = "0000{:04x}-3731-3032-494d-484f42525554"
+
+# Gen 1 base UUID: 000000xx-0000-4b49-4e4f-525441474947
+# Last 10 bytes = "KINORTAGIG" = reverse of "GIGATRONIK"
+GEN1_UUID_BASE = "0000{:04x}-0000-4b49-4e4f-525441474947"
+
+# Backward-compatible alias (Gen 2)
+UUID_BASE = GEN2_UUID_BASE
+
+_UUID_BASES: dict[ProtocolGeneration, str] = {
+    ProtocolGeneration.GEN_1: GEN1_UUID_BASE,
+    ProtocolGeneration.GEN_2: GEN2_UUID_BASE,
+}
 
 
 def _uuid(short: int) -> str:
-    """Expand a short UUID into the full 128-bit Specialized UUID."""
-    return UUID_BASE.format(short)
+    """Expand a short UUID into the full 128-bit Gen 2 UUID."""
+    return GEN2_UUID_BASE.format(short)
 
+
+def _uuid_gen1(short: int) -> str:
+    """Expand a short UUID into the full 128-bit Gen 1 UUID."""
+    return GEN1_UUID_BASE.format(short)
+
+
+def get_uuid(generation: ProtocolGeneration, short: int) -> str:
+    """Expand a short UUID for the given protocol generation."""
+    return _UUID_BASES[generation].format(short)
+
+
+# ------ Gen 2 UUIDs (default, backward-compatible) ------
 
 # Service UUIDs
 SERVICE_DATA_NOTIFY = _uuid(0x0003)  # Notification data service
@@ -37,10 +79,71 @@ CHAR_REQUEST_WRITE = _uuid(0x0021)  # WRITE — send a 2-byte request here
 CHAR_REQUEST_READ = _uuid(0x0011)  # READ — read the response after writing to 0x0021
 CHAR_WRITE = _uuid(0x0012)  # WRITE — send commands (assist level, settings)
 
-# Nordic Semiconductor BLE company ID (used in manufacturer advertising data)
+# ------ Gen 1 UUIDs ------
+
+SERVICE_DATA_NOTIFY_GEN1 = _uuid_gen1(0x0003)
+SERVICE_DATA_REQUEST_GEN1 = _uuid_gen1(0x0001)
+SERVICE_DATA_WRITE_GEN1 = _uuid_gen1(0x0002)
+
+CHAR_NOTIFY_GEN1 = _uuid_gen1(0x0013)
+CHAR_REQUEST_WRITE_GEN1 = _uuid_gen1(0x0021)
+CHAR_REQUEST_READ_GEN1 = _uuid_gen1(0x0011)
+CHAR_WRITE_GEN1 = _uuid_gen1(0x0012)
+
+# ------ Generation → UUID lookup ------
+
+_CHAR_NOTIFY_MAP: dict[ProtocolGeneration, str] = {
+    ProtocolGeneration.GEN_1: CHAR_NOTIFY_GEN1,
+    ProtocolGeneration.GEN_2: CHAR_NOTIFY,
+}
+
+_CHAR_REQUEST_READ_MAP: dict[ProtocolGeneration, str] = {
+    ProtocolGeneration.GEN_1: CHAR_REQUEST_READ_GEN1,
+    ProtocolGeneration.GEN_2: CHAR_REQUEST_READ,
+}
+
+_CHAR_REQUEST_WRITE_MAP: dict[ProtocolGeneration, str] = {
+    ProtocolGeneration.GEN_1: CHAR_REQUEST_WRITE_GEN1,
+    ProtocolGeneration.GEN_2: CHAR_REQUEST_WRITE,
+}
+
+_CHAR_WRITE_MAP: dict[ProtocolGeneration, str] = {
+    ProtocolGeneration.GEN_1: CHAR_WRITE_GEN1,
+    ProtocolGeneration.GEN_2: CHAR_WRITE,
+}
+
+
+def get_char_notify(generation: ProtocolGeneration) -> str:
+    """Return the CHAR_NOTIFY UUID for the given protocol generation."""
+    return _CHAR_NOTIFY_MAP[generation]
+
+
+def get_char_request_read(generation: ProtocolGeneration) -> str:
+    """Return the CHAR_REQUEST_READ UUID for the given protocol generation."""
+    return _CHAR_REQUEST_READ_MAP[generation]
+
+
+def get_char_request_write(generation: ProtocolGeneration) -> str:
+    """Return the CHAR_REQUEST_WRITE UUID for the given protocol generation."""
+    return _CHAR_REQUEST_WRITE_MAP[generation]
+
+
+def get_char_write(generation: ProtocolGeneration) -> str:
+    """Return the CHAR_WRITE UUID for the given protocol generation."""
+    return _CHAR_WRITE_MAP[generation]
+
+
+# ---------------------------------------------------------------------------
+# BLE company IDs
+# ---------------------------------------------------------------------------
+
+# Nordic Semiconductor (Gen 2 bikes)
 NORDIC_COMPANY_ID = 0x0059
 
-# Magic advertising string embedded in manufacturer data bytes [2:10]
+# Simplo Technology Co., LTD (Gen 1 bikes)
+SIMPLO_COMPANY_ID = 0x020D
+
+# Magic advertising string embedded in Gen 2 manufacturer data
 ADVERTISING_MAGIC = b"TURBOHMI"
 
 # ---------------------------------------------------------------------------
@@ -282,15 +385,30 @@ def is_specialized_advertisement(manufacturer_data: dict[int, bytes]) -> bool:
     """
     Check if BLE manufacturer data belongs to a Specialized Turbo bike.
 
-    Looks for the TURBOHMI magic bytes under Nordic's company ID (0x0059)
-    in the manufacturer_data dict from bleak's AdvertisementData.
+    Detects both Gen 2 (Nordic company ID + TURBOHMI magic) and
+    Gen 1 (Simplo Technology company ID) bikes.
     """
+    return detect_generation(manufacturer_data) is not None
+
+
+def detect_generation(
+    manufacturer_data: dict[int, bytes],
+) -> ProtocolGeneration | None:
+    """
+    Determine the protocol generation from BLE manufacturer advertisement data.
+
+    Returns ``ProtocolGeneration.GEN_2`` for Nordic/TURBOHMI advertisements,
+    ``ProtocolGeneration.GEN_1`` for Simplo Technology advertisements,
+    or ``None`` if the data does not match a known Specialized bike.
+    """
+    # Gen 2: Nordic company ID with TURBOHMI magic
     payload = manufacturer_data.get(NORDIC_COMPANY_ID)
-    if payload is None:
-        return False
-    # The "TURBOHMI" string appears at bytes [0:8] of the payload
-    # (company ID already stripped by bleak)
-    return ADVERTISING_MAGIC in payload
+    if payload is not None and ADVERTISING_MAGIC in payload:
+        return ProtocolGeneration.GEN_2
+    # Gen 1: Simplo Technology company ID
+    if SIMPLO_COMPANY_ID in manufacturer_data:
+        return ProtocolGeneration.GEN_1
+    return None
 
 
 # ---------------------------------------------------------------------------

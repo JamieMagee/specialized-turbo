@@ -19,7 +19,12 @@ from .protocol import (
     CHAR_NOTIFY,
     CHAR_REQUEST_READ,
     CHAR_REQUEST_WRITE,
+    ProtocolGeneration,
     build_request,
+    detect_generation,
+    get_char_notify,
+    get_char_request_read,
+    get_char_request_write,
     is_specialized_advertisement,
     parse_message,
     ParsedMessage,
@@ -40,7 +45,7 @@ async def scan_for_bikes(
     Scan for Specialized Turbo bikes over BLE.
 
     Returns (device, advertisement_data) tuples for bikes that advertise
-    the TURBOHMI manufacturer data under Nordic's company ID (0x0059).
+    as Specialized Turbo bikes (Gen 1 or Gen 2).
     """
     found: list[tuple[BLEDevice, AdvertisementData]] = []
 
@@ -93,6 +98,7 @@ class SpecializedConnection:
         address_or_device: str | BLEDevice,
         *,
         pin: int | None = None,
+        generation: ProtocolGeneration = ProtocolGeneration.GEN_2,
         disconnect_callback: Callable[[BleakClient], None] | None = None,
     ) -> None:
         """
@@ -103,11 +109,18 @@ class SpecializedConnection:
         pin :
             Numeric passkey displayed on the bike's TCU.  Required for
             pairing on first connection.
+        generation :
+            Protocol generation (GEN_1 or GEN_2).  Determines which
+            GATT UUIDs to use.  Defaults to GEN_2.
         disconnect_callback :
             Optional callback invoked if the bike disconnects unexpectedly.
         """
         self._address = address_or_device
         self._pin = pin
+        self._generation = generation
+        self._char_notify = get_char_notify(generation)
+        self._char_request_read = get_char_request_read(generation)
+        self._char_request_write = get_char_request_write(generation)
         self._client: BleakClient | None = None
         self._disconnect_cb = disconnect_callback
         self._notification_started = False
@@ -139,7 +152,7 @@ class SpecializedConnection:
         # This initiates the MITM + Secure Connections auth flow.
         try:
             logger.debug("Triggering pairing by reading CHAR_NOTIFY ...")
-            await self._client.read_gatt_char(CHAR_NOTIFY)
+            await self._client.read_gatt_char(self._char_notify)
         except Exception as exc:
             logger.debug(
                 "Initial read raised %s (expected during pairing): %s",
@@ -171,7 +184,7 @@ class SpecializedConnection:
         if self._client and self._client.is_connected:
             if self._notification_started:
                 try:
-                    await self._client.stop_notify(CHAR_NOTIFY)
+                    await self._client.stop_notify(self._char_notify)
                 except Exception:
                     pass
                 self._notification_started = False
@@ -192,14 +205,14 @@ class SpecializedConnection:
         """Start receiving telemetry notifications. Callback gets (characteristic, data)."""
         if self._client is None:
             raise RuntimeError("Not connected")
-        await self._client.start_notify(CHAR_NOTIFY, callback)
+        await self._client.start_notify(self._char_notify, callback)
         self._notification_started = True
         logger.info("Subscribed to telemetry notifications")
 
     async def unsubscribe_notifications(self) -> None:
         """Stop receiving telemetry notifications."""
         if self._client and self._notification_started:
-            await self._client.stop_notify(CHAR_NOTIFY)
+            await self._client.stop_notify(self._char_notify)
             self._notification_started = False
             logger.info("Unsubscribed from notifications")
 
@@ -217,12 +230,12 @@ class SpecializedConnection:
             raise RuntimeError("Not connected")
         request_bytes = build_request(sender, channel)
         logger.debug("Request-write: %s", request_bytes.hex())
-        await self._client.write_gatt_char(CHAR_REQUEST_WRITE, request_bytes)
+        await self._client.write_gatt_char(self._char_request_write, request_bytes)
 
         # Small delay to allow the bike to prepare the response
         await asyncio.sleep(0.1)
 
-        response = await self._client.read_gatt_char(CHAR_REQUEST_READ)
+        response = await self._client.read_gatt_char(self._char_request_read)
         logger.debug("Request-read response: %s", bytes(response).hex())
         msg = parse_message(response)
 

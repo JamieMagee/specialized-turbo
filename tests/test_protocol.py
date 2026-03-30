@@ -12,21 +12,34 @@ from specialized_turbo.protocol import (
     BatteryChannel,
     MotorChannel,
     BikeSettingsChannel,
+    ProtocolGeneration,
     Sender,
     _uuid,
+    _uuid_gen1,
     all_field_defs,
     build_request,
+    detect_generation,
+    get_char_notify,
     get_field_def,
+    get_uuid,
     is_specialized_advertisement,
     parse_message,
     CHAR_NOTIFY,
+    CHAR_NOTIFY_GEN1,
     CHAR_REQUEST_READ,
+    CHAR_REQUEST_READ_GEN1,
     CHAR_REQUEST_WRITE,
+    CHAR_REQUEST_WRITE_GEN1,
     CHAR_WRITE,
+    CHAR_WRITE_GEN1,
     SERVICE_DATA_NOTIFY,
+    SERVICE_DATA_NOTIFY_GEN1,
     SERVICE_DATA_REQUEST,
+    SERVICE_DATA_REQUEST_GEN1,
     SERVICE_DATA_WRITE,
+    SERVICE_DATA_WRITE_GEN1,
     NORDIC_COMPANY_ID,
+    SIMPLO_COMPANY_ID,
 )
 
 
@@ -374,3 +387,112 @@ class TestBuildRequest:
 
     def test_motor_speed_request(self):
         assert build_request(Sender.MOTOR, MotorChannel.SPEED) == b"\x01\x02"
+
+
+# ======================================================================
+# Gen 1 UUID generation
+# ======================================================================
+
+
+class TestGen1UUIDs:
+    def test_gen1_uuid_base_format(self):
+        uuid = _uuid_gen1(0x0013)
+        assert uuid == "00000013-0000-4b49-4e4f-525441474947"
+
+    def test_gen1_service_notify_uuid(self):
+        assert SERVICE_DATA_NOTIFY_GEN1 == "00000003-0000-4b49-4e4f-525441474947"
+
+    def test_gen1_service_request_uuid(self):
+        assert SERVICE_DATA_REQUEST_GEN1 == "00000001-0000-4b49-4e4f-525441474947"
+
+    def test_gen1_service_write_uuid(self):
+        assert SERVICE_DATA_WRITE_GEN1 == "00000002-0000-4b49-4e4f-525441474947"
+
+    def test_gen1_char_notify_uuid(self):
+        assert CHAR_NOTIFY_GEN1 == "00000013-0000-4b49-4e4f-525441474947"
+
+    def test_gen1_char_request_write_uuid(self):
+        assert CHAR_REQUEST_WRITE_GEN1 == "00000021-0000-4b49-4e4f-525441474947"
+
+    def test_gen1_char_request_read_uuid(self):
+        assert CHAR_REQUEST_READ_GEN1 == "00000011-0000-4b49-4e4f-525441474947"
+
+    def test_gen1_char_write_uuid(self):
+        assert CHAR_WRITE_GEN1 == "00000012-0000-4b49-4e4f-525441474947"
+
+    def test_gen1_uuid_base_contains_gigatronik(self):
+        """Last 10 bytes of Gen 1 UUID base decode to GIGATRONIK reversed."""
+        uuid = _uuid_gen1(0x0000)
+        # Extract: 0000-4b49-4e4f-525441474947
+        parts = uuid.split("-")
+        tail_hex = "".join(parts[2:])  # 4b494e4f525441474947
+        tail_bytes = bytes.fromhex(tail_hex)
+        decoded = tail_bytes.decode("ascii")
+        assert "".join(reversed(decoded)) == "GIGATRONIK"
+
+    def test_get_uuid_gen1(self):
+        assert get_uuid(ProtocolGeneration.GEN_1, 0x0013) == CHAR_NOTIFY_GEN1
+
+    def test_get_uuid_gen2(self):
+        assert get_uuid(ProtocolGeneration.GEN_2, 0x0013) == CHAR_NOTIFY
+
+    def test_get_char_notify_gen1(self):
+        assert get_char_notify(ProtocolGeneration.GEN_1) == CHAR_NOTIFY_GEN1
+
+    def test_get_char_notify_gen2(self):
+        assert get_char_notify(ProtocolGeneration.GEN_2) == CHAR_NOTIFY
+
+
+# ======================================================================
+# Gen 1 advertising detection
+# ======================================================================
+
+
+class TestGen1Advertising:
+    def test_detects_gen1_simplo(self):
+        """Gen 1 bikes advertise with Simplo Technology manufacturer ID."""
+        payload = bytes.fromhex("028657" + "ff" * 24)
+        assert is_specialized_advertisement({SIMPLO_COMPANY_ID: payload}) is True
+
+    def test_detect_generation_gen1(self):
+        payload = bytes.fromhex("028657" + "ff" * 24)
+        assert detect_generation({SIMPLO_COMPANY_ID: payload}) == ProtocolGeneration.GEN_1
+
+    def test_detect_generation_gen2(self):
+        payload = bytes.fromhex("545552424f484d493230313701000000")
+        assert detect_generation({NORDIC_COMPANY_ID: payload}) == ProtocolGeneration.GEN_2
+
+    def test_detect_generation_unknown(self):
+        assert detect_generation({}) is None
+        assert detect_generation({0x1234: b"random"}) is None
+
+    def test_gen1_with_serial_number_payload(self):
+        """Real Gen 1 manufacturer data from a 2018 Turbo Levo."""
+        payload = bytes.fromhex(
+            "02865701433937323732"
+            "2D313033303331373330333830382D322D30303538"
+        )
+        assert detect_generation({SIMPLO_COMPANY_ID: payload}) == ProtocolGeneration.GEN_1
+
+
+# ======================================================================
+# Gen 1 message parsing (same format as Gen 2)
+# ======================================================================
+
+
+class TestGen1MessageParsing:
+    def test_gen1_notification_with_ff_padding(self):
+        """Gen 1 sends 20-byte notifications padded with 0xFF."""
+        # 01 05 01 00 FF FF... → assist_level ECO, padded with FF
+        data = bytes.fromhex("01050100" + "ff" * 16)
+        msg = parse_message(data)
+        assert msg.field_name == "assist_level"
+        assert msg.converted_value == AssistLevel.ECO
+
+    def test_gen1_battery_charge_with_padding(self):
+        """Gen 1 battery charge notification with FF padding."""
+        # 00 0c 34 FF FF... → battery_charge_percent = 52%
+        data = bytes.fromhex("000c34" + "ff" * 17)
+        msg = parse_message(data)
+        assert msg.field_name == "battery_charge_percent"
+        assert msg.converted_value == 52

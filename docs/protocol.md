@@ -1,7 +1,10 @@
 # Specialized Turbo BLE protocol reference
 
-> Protocol generation: Gen 2, "TURBOHMI2017"  
-> Applicable models: Specialized Turbo Vado, Levo, Creo, and other Turbo models with TCU (2017+)  
+> **Two protocol generations** are supported:  
+> - **Gen 2** ("TURBOHMI2017"): Vado, Levo, Creo 2019+ — Nordic manufacturer ID  
+> - **Gen 1** ("GIGATRONIK"): Levo 2018 — Simplo manufacturer ID  
+>
+> Both generations share the same message format and field definitions; only the BLE UUIDs and advertisement data differ.  
 > Based on: [Sepp62/LevoEsp32Ble](https://github.com/Sepp62/LevoEsp32Ble) (MIT license)
 
 ---
@@ -20,9 +23,9 @@ There are three communication patterns:
 
 ## 2. BLE discovery
 
-### Advertising data
+### Gen 2 advertising data
 
-The bike advertises using Nordic Semiconductor's company ID (`0x0059`) with manufacturer-specific data containing the ASCII string `"TURBOHMI"`:
+Gen 2 bikes advertise using Nordic Semiconductor's company ID (`0x0059`) with manufacturer-specific data containing the ASCII string `"TURBOHMI"`:
 
 | Field | Value |
 | --- | --- |
@@ -38,19 +41,47 @@ Company ID: 59 00
 Payload:    54 55 52 42 4f 48 4d 49 32 30 31 37 01 00 00 00 00
 ```
 
+### Gen 1 advertising data
+
+Gen 1 bikes (2018 Turbo Levo) advertise using Simplo Technology's company ID (`0x020D`) with device-specific payload data:
+
+| Field | Value |
+| --- | --- |
+| Company ID | `0x020D` (Simplo Technology Co., LTD) |
+| Advertised name | `SPECIALIZED` |
+| Service UUID | `0x1816` (Cycling Speed and Cadence) |
+| Payload | Variable (serial number / firmware string) |
+
+**Full advertising example:**
+
+```plain
+Company ID: 0D 02
+Payload:    02 86 57 01 43 39 37 32 37 32 2D 31 30 33 30 ...
+```
+
+> **Note:** Gen 1 notifications are padded with `0xFF` to 20 bytes. The parser ignores trailing bytes.
+
 ### Detection algorithm
 
 ```python
-def is_specialized_bike(manufacturer_data: dict[int, bytes]) -> bool:
-    payload = manufacturer_data.get(0x0059)  # Nordic company ID
-    return payload is not None and b"TURBOHMI" in payload
+def detect_generation(manufacturer_data: dict[int, bytes]) -> str | None:
+    # Gen 2: Nordic company ID with TURBOHMI magic
+    payload = manufacturer_data.get(0x0059)
+    if payload is not None and b"TURBOHMI" in payload:
+        return "gen2"
+    # Gen 1: Simplo Technology company ID
+    if 0x020D in manufacturer_data:
+        return "gen1"
+    return None
 ```
 
 ---
 
 ## 3. UUID structure
 
-All service and characteristic UUIDs share a 128-bit base:
+Both generations use the same short IDs for services and characteristics but with different 128-bit UUID bases.
+
+### Gen 2 UUID base
 
 ```plain
 000000xx-3731-3032-494d-484f42525554
@@ -62,22 +93,34 @@ The last 12 bytes (`3731-3032-494d-484f42525554`) decode as ASCII:
 - ASCII: `7102IMHOBRUT`
 - Reversed: **`TURBOHMI2017`**
 
+### Gen 1 UUID base
+
+```plain
+000000xx-0000-4b49-4e4f-525441474947
+```
+
+The last 10 bytes (`4b49-4e4f-525441474947`) decode as ASCII:
+
+- Hex: `4b 49 4e 4f 52 54 41 47 49 47`
+- ASCII: `KINORTAGIG`
+- Reversed: **`GIGATRONIK`** (Gen 1 TCU manufacturer)
+
 ### Services
 
-| Purpose | Short ID | Full UUID |
-| --- | --- | --- |
-| **Notification Data** | `0x0003` | `00000003-3731-3032-494d-484f42525554` |
-| **Request / Query** | `0x0001` | `00000001-3731-3032-494d-484f42525554` |
-| **Write / Commands** | `0x0002` | `00000002-3731-3032-494d-484f42525554` |
+| Purpose | Short ID | Gen 2 UUID | Gen 1 UUID |
+| --- | --- | --- | --- |
+| **Notification Data** | `0x0003` | `00000003-3731-3032-494d-484f42525554` | `00000003-0000-4b49-4e4f-525441474947` |
+| **Request / Query** | `0x0001` | `00000001-3731-3032-494d-484f42525554` | `00000001-0000-4b49-4e4f-525441474947` |
+| **Write / Commands** | `0x0002` | `00000002-3731-3032-494d-484f42525554` | `00000002-0000-4b49-4e4f-525441474947` |
 
 ### Characteristics
 
-| Service | Char Short ID | Full UUID | Properties | Purpose |
-| --- | --- | --- | --- | --- |
-| `0x0003` | `0x0013` | `00000013-3731-3032-494d-484f42525554` | READ, NOTIFY | Bike pushes telemetry here |
-| `0x0001` | `0x0021` | `00000021-3731-3032-494d-484f42525554` | WRITE | Write request query here |
-| `0x0001` | `0x0011` | `00000011-3731-3032-494d-484f42525554` | READ | Read query response here |
-| `0x0002` | `0x0012` | `00000012-3731-3032-494d-484f42525554` | WRITE | Send commands here |
+| Service | Char Short ID | Gen 2 UUID | Gen 1 UUID | Properties | Purpose |
+| --- | --- | --- | --- | --- | --- |
+| `0x0003` | `0x0013` | `00000013-3731-3032-494d-484f42525554` | `00000013-0000-4b49-4e4f-525441474947` | READ, NOTIFY | Bike pushes telemetry here |
+| `0x0001` | `0x0021` | `00000021-3731-3032-494d-484f42525554` | `00000021-0000-4b49-4e4f-525441474947` | WRITE | Write request query here |
+| `0x0001` | `0x0011` | `00000011-3731-3032-494d-484f42525554` | `00000011-0000-4b49-4e4f-525441474947` | READ | Read query response here |
+| `0x0002` | `0x0012` | `00000012-3731-3032-494d-484f42525554` | `00000012-0000-4b49-4e4f-525441474947` | WRITE | Send commands here |
 
 ---
 
