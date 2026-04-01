@@ -153,6 +153,50 @@ class TestTelemetrySnapshot:
         d = snap.as_dict()
         assert "battery2" not in d
 
+    def test_sentinel_values_not_stored(self):
+        """All-0xFF (stripped) values should not update snapshot fields."""
+        snap = TelemetrySnapshot()
+        # Send cadence with all-0xFF payload (stripped to empty → None)
+        snap.update_from_message(parse_message(bytes.fromhex("0101ffff")))
+        assert snap.motor.cadence_rpm is None
+        assert snap.message_count == 1  # message still counted
+
+    def test_sentinel_does_not_overwrite_valid(self):
+        """An all-0xFF value should not overwrite a previously valid value."""
+        snap = TelemetrySnapshot()
+        # Set valid speed first
+        snap.update_from_message(parse_message(bytes.fromhex("0102fa00")))  # 25.0 km/h
+        assert snap.motor.speed_kmh == pytest.approx(25.0)
+        # Now send all-0xFF
+        snap.update_from_message(parse_message(bytes.fromhex("0102ffff")))
+        assert snap.motor.speed_kmh == pytest.approx(25.0)  # unchanged
+
+    def test_gen1_mixed_valid_and_stripped(self):
+        """Simulate Gen 1 scenario: some fields valid, others all-0xFF."""
+        snap = TelemetrySnapshot()
+        # Valid battery temp (1 byte, not all-FF)
+        snap.update_from_message(parse_message(bytes.fromhex("000312")))  # 18°C
+        # All-FF cadence
+        snap.update_from_message(parse_message(bytes.fromhex("0101ffff")))
+        # All-FF speed
+        snap.update_from_message(parse_message(bytes.fromhex("0102ffff")))
+        # Valid voltage
+        snap.update_from_message(parse_message(bytes.fromhex("00055a")))  # 38V
+
+        assert snap.battery.temp_c == 18
+        assert snap.battery.voltage_v == pytest.approx(38.0)
+        assert snap.motor.cadence_rpm is None
+        assert snap.motor.speed_kmh is None
+        assert snap.message_count == 4
+
+    def test_gen1_peak_assist_single_byte(self):
+        """Gen 1 peak_assist stores single-byte values (not 3-byte tuple)."""
+        snap = TelemetrySnapshot()
+        # 01 10 1A FF FF... → stripped to 1 byte → raw 0x1A=26
+        data = bytes.fromhex("01101A" + "ff" * 17)
+        snap.update_from_message(parse_message(data))
+        assert snap.motor.peak_assist == 26
+
     def test_full_scenario(self):
         """Simulate a realistic sequence of messages."""
         snap = TelemetrySnapshot()

@@ -355,6 +355,139 @@ class TestEdgeCases:
 
 
 # ======================================================================
+# Padding stripping and sentinel detection
+# ======================================================================
+
+
+class TestPaddingStripping:
+    def test_1byte_all_ff(self):
+        """0xFF for a 1-byte field → entire payload stripped → None."""
+        # battery_health (sender=0x00, channel=0x02, data_size=1)
+        msg = parse_message(bytes.fromhex("0002ff"))
+        assert msg.field_name == "battery_health"
+        assert msg.converted_value is None
+
+    def test_2byte_all_ff(self):
+        """0xFFFF for a 2-byte field → entire payload stripped → None."""
+        # cadence (sender=0x01, channel=0x01, data_size=2)
+        msg = parse_message(bytes.fromhex("0101ffff"))
+        assert msg.field_name == "cadence"
+        assert msg.converted_value is None
+
+    def test_2byte_ff_speed(self):
+        """Speed with 0xFFFF → None."""
+        msg = parse_message(bytes.fromhex("0102ffff"))
+        assert msg.field_name == "speed"
+        assert msg.converted_value is None
+
+    def test_2byte_ff_rider_power(self):
+        """Rider power with 0xFFFF → None."""
+        msg = parse_message(bytes.fromhex("0100ffff"))
+        assert msg.field_name == "rider_power"
+        assert msg.converted_value is None
+
+    def test_4byte_all_ff(self):
+        """0xFFFFFFFF for a 4-byte field → entire payload stripped → None."""
+        # odometer (sender=0x01, channel=0x04, data_size=4)
+        msg = parse_message(bytes.fromhex("0104ffffffff"))
+        assert msg.field_name == "odometer"
+        assert msg.converted_value is None
+
+    def test_stripped_preserves_field_name_and_unit(self):
+        """Fully-stripped messages still report field_name and unit."""
+        msg = parse_message(bytes.fromhex("0100ffff"))
+        assert msg.field_name == "rider_power"
+        assert msg.unit == "W"
+
+    def test_non_ff_values_unaffected(self):
+        """Non-0xFF values still parse normally."""
+        msg = parse_message(bytes.fromhex("0100c800"))
+        assert msg.converted_value == 200  # 200 W
+
+    def test_gen1_padded_all_ff_cadence(self):
+        """Gen 1 cadence with full 0xFF padding → None."""
+        data = bytes.fromhex("0101ffff" + "ff" * 16)
+        msg = parse_message(data)
+        assert msg.field_name == "cadence"
+        assert msg.converted_value is None
+
+    def test_gen1_padded_all_ff_speed(self):
+        """Gen 1 speed with full 0xFF padding → None."""
+        data = bytes.fromhex("0102ffff" + "ff" * 16)
+        msg = parse_message(data)
+        assert msg.field_name == "speed"
+        assert msg.converted_value is None
+
+    def test_gen1_padded_valid_data(self):
+        """Gen 1 valid data still works despite trailing 0xFF padding."""
+        # assist_level ECO: 01 05 01 00 FF FF...
+        data = bytes.fromhex("01050100" + "ff" * 16)
+        msg = parse_message(data)
+        assert msg.field_name == "assist_level"
+        assert msg.converted_value == AssistLevel.ECO
+
+    def test_gen1_peak_assist_single_byte(self):
+        """Gen 1 sends peak_assist as 1 byte + 0xFF padding.
+
+        Gen 2 sends 3 packed bytes (ECO%, TRAIL%, TURBO%).
+        Gen 1 sends individual values as single-byte messages.
+        0x1A=26 could be ECO assist percentage.
+        """
+        data = bytes.fromhex("01101A" + "ff" * 17)
+        msg = parse_message(data)
+        assert msg.field_name == "peak_assist"
+        assert msg.raw_value == 0x1A  # 26
+        assert msg.converted_value == 26
+
+    def test_gen1_peak_assist_values_from_log(self):
+        """The three peak_assist values seen cycling in Jan's debug log."""
+        # 0x67=103, 0x1A=26, 0x34=52 — assist percentages for 3 levels
+        for hex_byte, expected in [("67", 103), ("1A", 26), ("34", 52)]:
+            data = bytes.fromhex("0110" + hex_byte + "ff" * 17)
+            msg = parse_message(data)
+            assert msg.field_name == "peak_assist"
+            assert msg.raw_value == expected
+            assert msg.converted_value == expected
+
+    def test_gen1_battery_remaining_wh(self):
+        """Gen 1 battery remaining with real 2-byte data + padding."""
+        # 00 01 E9 00 FF FF... → remaining_wh raw=0x00E9=233 → 233*1.1111≈259
+        data = bytes.fromhex("0001E900" + "ff" * 16)
+        msg = parse_message(data)
+        assert msg.field_name == "battery_remaining_wh"
+        assert msg.converted_value == 259
+
+    def test_gen1_motor_temp_with_padding(self):
+        """Gen 1 motor temp (1 byte) with padding."""
+        data = bytes.fromhex("010712" + "ff" * 17)  # 0x12 = 18°C
+        msg = parse_message(data)
+        assert msg.field_name == "motor_temp"
+        assert msg.converted_value == 18
+
+    def test_gen1_battery_voltage_with_padding(self):
+        """Gen 1 battery voltage (1 byte) with padding."""
+        # 0x58 = 88 → 88/5+20 = 37.6V
+        data = bytes.fromhex("000558" + "ff" * 17)
+        msg = parse_message(data)
+        assert msg.field_name == "battery_voltage"
+        assert msg.converted_value == pytest.approx(37.6)
+
+    def test_unknown_field_with_padding(self):
+        """Unknown sender/channel with 0xFF padding → stripped to real data."""
+        data = bytes.fromhex("FF0042" + "ff" * 17)
+        msg = parse_message(data)
+        assert msg.field_name is None
+        assert msg.raw_value == 0x42
+
+    def test_unknown_field_all_ff_payload(self):
+        """Unknown field with only 0xFF payload → None."""
+        data = bytes.fromhex("FF00" + "ff" * 18)
+        msg = parse_message(data)
+        assert msg.field_name is None
+        assert msg.converted_value is None
+
+
+# ======================================================================
 # Advertising detection
 # ======================================================================
 

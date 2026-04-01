@@ -335,7 +335,7 @@ class ParsedMessage(NamedTuple):
     sender: int
     channel: int
     raw_value: int
-    converted_value: float | int | AssistLevel
+    converted_value: float | int | AssistLevel | None
     field_name: str | None  # None if field is unknown
     unit: str
 
@@ -353,12 +353,32 @@ def parse_message(data: bytes | bytearray) -> ParsedMessage:
 
     sender = data[0]
     channel = data[1]
+
+    # Gen 1 bikes pad notifications to 20 bytes with 0xFF.  Strip trailing
+    # padding so field extraction uses only the real data bytes.
     payload = data[2:]
+    payload = payload.rstrip(b"\xff")
+
+    # No real data bytes after stripping → field has no value available.
+    if len(payload) == 0:
+        field_def = get_field_def(sender, channel)
+        return ParsedMessage(
+            sender=sender,
+            channel=channel,
+            raw_value=0,
+            converted_value=None,
+            field_name=field_def.name if field_def else None,
+            unit=field_def.unit if field_def else "",
+        )
 
     field_def = get_field_def(sender, channel)
 
     if field_def is not None:
-        raw = _int_from_bytes(data, 2, field_def.data_size)
+        # Use the smaller of defined size vs actual payload to avoid
+        # reading into padding on Gen 1 (e.g. peak_assist is 3 bytes on
+        # Gen 2 but only 1 byte per message on Gen 1).
+        actual_size = min(field_def.data_size, len(payload))
+        raw = _int_from_bytes(payload, 0, actual_size)
         converted = field_def.convert(raw)
         return ParsedMessage(
             sender=sender,
@@ -370,7 +390,7 @@ def parse_message(data: bytes | bytearray) -> ParsedMessage:
         )
     else:
         # Unknown field — extract as many bytes as available
-        raw = _int_from_bytes(data, 2, len(payload))
+        raw = _int_from_bytes(payload, 0, len(payload))
         return ParsedMessage(
             sender=sender,
             channel=channel,

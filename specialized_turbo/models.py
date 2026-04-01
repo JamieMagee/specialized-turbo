@@ -194,6 +194,10 @@ class TelemetrySnapshot:
         channel = msg.channel
         value = msg.converted_value
 
+        # Skip sentinel values (all-bits-set = "not available")
+        if value is None:
+            return
+
         if sender == Sender.BATTERY:
             if not self.battery.update(channel, value):
                 self.unknown_messages.append(msg)
