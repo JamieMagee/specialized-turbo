@@ -56,6 +56,7 @@ from .protocol import (
     all_field_defs as all_field_defs,
     build_request as build_request,
     is_specialized_advertisement as is_specialized_advertisement,
+    GEN1_POLL_FIELDS as GEN1_POLL_FIELDS,
     # Company IDs
     NORDIC_COMPANY_ID as NORDIC_COMPANY_ID,
     SIMPLO_COMPANY_ID as SIMPLO_COMPANY_ID,
@@ -115,6 +116,7 @@ __all__ = [
     "all_field_defs",
     "build_request",
     "is_specialized_advertisement",
+    "GEN1_POLL_FIELDS",
     # Company IDs
     "NORDIC_COMPANY_ID",
     "SIMPLO_COMPANY_ID",
@@ -132,4 +134,4 @@ __all__ = [
     "run_telemetry_session",
 ]
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
