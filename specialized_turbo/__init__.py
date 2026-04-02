@@ -59,6 +59,7 @@ from .protocol import (
     GEN1_POLL_FIELDS as GEN1_POLL_FIELDS,
     # Company IDs
     NORDIC_COMPANY_ID as NORDIC_COMPANY_ID,
+    APPLE_COMPANY_ID as APPLE_COMPANY_ID,
     SIMPLO_COMPANY_ID as SIMPLO_COMPANY_ID,
 )
 from .models import (
@@ -119,6 +120,7 @@ __all__ = [
     "GEN1_POLL_FIELDS",
     # Company IDs
     "NORDIC_COMPANY_ID",
+    "APPLE_COMPANY_ID",
     "SIMPLO_COMPANY_ID",
     # Models
     "BatteryState",
@@ -134,4 +136,4 @@ __all__ = [
     "run_telemetry_session",
 ]
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"

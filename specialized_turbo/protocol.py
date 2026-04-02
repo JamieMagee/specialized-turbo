@@ -140,6 +140,9 @@ def get_char_write(generation: ProtocolGeneration) -> str:
 # Nordic Semiconductor (Gen 2 bikes)
 NORDIC_COMPANY_ID = 0x0059
 
+# Apple Inc. (some Gen 2 bikes advertise TURBOHMI in an iBeacon frame)
+APPLE_COMPANY_ID = 0x004C
+
 # Simplo Technology Co., LTD (Gen 1 bikes)
 SIMPLO_COMPANY_ID = 0x020D
 
@@ -421,10 +424,12 @@ def detect_generation(
     ``ProtocolGeneration.GEN_1`` for Simplo Technology advertisements,
     or ``None`` if the data does not match a known Specialized bike.
     """
-    # Gen 2: Nordic company ID with TURBOHMI magic
-    payload = manufacturer_data.get(NORDIC_COMPANY_ID)
-    if payload is not None and ADVERTISING_MAGIC in payload:
-        return ProtocolGeneration.GEN_2
+    # Gen 2: TURBOHMI magic in any manufacturer data payload.
+    # Most bikes use Nordic (0x0059), but some (e.g. Vado 3.0) put it
+    # in an Apple iBeacon frame (0x004C) instead.
+    for payload in manufacturer_data.values():
+        if ADVERTISING_MAGIC in payload:
+            return ProtocolGeneration.GEN_2
     # Gen 1: Simplo Technology company ID
     if SIMPLO_COMPANY_ID in manufacturer_data:
         return ProtocolGeneration.GEN_1

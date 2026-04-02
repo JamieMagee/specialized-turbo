@@ -498,9 +498,16 @@ class TestAdvertising:
         payload = bytes.fromhex("545552424f484d493230313701000000")
         assert is_specialized_advertisement({NORDIC_COMPANY_ID: payload}) is True
 
-    def test_rejects_non_nordic(self):
+    def test_detects_turbohmi_in_apple_ibeacon(self):
+        """Vado 3.0 puts TURBOHMI in an Apple iBeacon frame (mfr ID 0x004C)."""
+        ibeacon = bytes.fromhex("0215545552424f484d4932303137010000005fe033060a")
+        nordic = bytes.fromhex("dac8c404423333330601")
+        assert is_specialized_advertisement({0x004C: ibeacon, NORDIC_COMPANY_ID: nordic}) is True
+
+    def test_detects_turbohmi_any_manufacturer_id(self):
+        """TURBOHMI magic should be detected regardless of manufacturer ID."""
         payload = bytes.fromhex("545552424f484d493230313701000000")
-        assert is_specialized_advertisement({0x1234: payload}) is False
+        assert is_specialized_advertisement({0x1234: payload}) is True
 
     def test_rejects_wrong_payload(self):
         assert is_specialized_advertisement({NORDIC_COMPANY_ID: b"NOT_A_BIKE"}) is False
@@ -597,6 +604,15 @@ class TestGen1Advertising:
         payload = bytes.fromhex("545552424f484d493230313701000000")
         assert (
             detect_generation({NORDIC_COMPANY_ID: payload}) == ProtocolGeneration.GEN_2
+        )
+
+    def test_detect_generation_gen2_apple_ibeacon(self):
+        """Vado 3.0: TURBOHMI in Apple iBeacon, unrelated data in Nordic."""
+        ibeacon = bytes.fromhex("0215545552424f484d4932303137010000005fe033060a")
+        nordic = bytes.fromhex("dac8c404423333330601")
+        assert (
+            detect_generation({0x004C: ibeacon, NORDIC_COMPANY_ID: nordic})
+            == ProtocolGeneration.GEN_2
         )
 
     def test_detect_generation_unknown(self):
