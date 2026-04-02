@@ -502,7 +502,10 @@ class TestAdvertising:
         """Vado 3.0 puts TURBOHMI in an Apple iBeacon frame (mfr ID 0x004C)."""
         ibeacon = bytes.fromhex("0215545552424f484d4932303137010000005fe033060a")
         nordic = bytes.fromhex("dac8c404423333330601")
-        assert is_specialized_advertisement({0x004C: ibeacon, NORDIC_COMPANY_ID: nordic}) is True
+        assert (
+            is_specialized_advertisement({0x004C: ibeacon, NORDIC_COMPANY_ID: nordic})
+            is True
+        )
 
     def test_detects_turbohmi_any_manufacturer_id(self):
         """TURBOHMI magic should be detected regardless of manufacturer ID."""
