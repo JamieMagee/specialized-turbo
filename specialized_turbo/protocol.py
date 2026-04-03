@@ -450,15 +450,17 @@ def build_request(sender: int, channel: int) -> bytes:
 # Gen 1 polling
 # ---------------------------------------------------------------------------
 
-# Fields to poll via request-read on Gen 1 bikes. Gen 1 only pushes a few
-# fields passively (peak_assist, motor_temp, battery_temp, battery_voltage).
-# Everything else must be explicitly queried.
+# Fields to poll via request-read on Gen 1 bikes. Gen 1 pushes very few
+# fields passively (peak_assist cycles constantly, temps and voltage arrive
+# infrequently). Poll everything we care about.
 GEN1_POLL_FIELDS: tuple[tuple[int, int], ...] = (
     # Battery
     (Sender.BATTERY, BatteryChannel.SIZE_WH),
     (Sender.BATTERY, BatteryChannel.REMAIN_WH),
     (Sender.BATTERY, BatteryChannel.HEALTH),
+    (Sender.BATTERY, BatteryChannel.TEMP),
     (Sender.BATTERY, BatteryChannel.CHARGE_CYCLES),
+    (Sender.BATTERY, BatteryChannel.VOLTAGE),
     (Sender.BATTERY, BatteryChannel.CURRENT),
     (Sender.BATTERY, BatteryChannel.CHARGE_PERCENT),
     # Motor / rider
@@ -467,5 +469,6 @@ GEN1_POLL_FIELDS: tuple[tuple[int, int], ...] = (
     (Sender.MOTOR, MotorChannel.SPEED),
     (Sender.MOTOR, MotorChannel.ODOMETER),
     (Sender.MOTOR, MotorChannel.ASSIST_LEVEL),
+    (Sender.MOTOR, MotorChannel.MOTOR_TEMP),
     (Sender.MOTOR, MotorChannel.MOTOR_POWER),
 )

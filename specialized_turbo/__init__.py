@@ -136,4 +136,4 @@ __all__ = [
     "run_telemetry_session",
 ]
 
-__version__ = "0.2.4"
+__version__ = "0.2.5"
