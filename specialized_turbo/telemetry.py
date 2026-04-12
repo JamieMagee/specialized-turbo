@@ -10,13 +10,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable
 
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
 from .connection import SpecializedConnection
 from .models import TelemetrySnapshot
-from .protocol import parse_message, ParsedMessage
+from .protocol import parse_message, parse_tcx_message, ParsedMessage
+from .session import TCXSession
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,12 @@ class TelemetryMonitor:
     ) -> None:
         """Called by bleak for each notification. Parses, updates snapshot, notifies consumers."""
         try:
-            msg = parse_message(data)
+            session = self._conn.session
+            unpacked = session.unpack(data)
+            if isinstance(session, TCXSession):
+                msg = parse_tcx_message(unpacked)
+            else:
+                msg = parse_message(unpacked)
         except Exception:
             logger.warning(
                 "Failed to parse notification: %s", data.hex(), exc_info=True
@@ -124,7 +130,7 @@ class TelemetryMonitor:
 async def run_telemetry_session(
     address: str,
     *,
-    pin: int | None = None,
+    pin: str | None = None,
     duration: float = 0,
     output_format: str = "table",
     output_callback: Callable[[str], None] | None = None,

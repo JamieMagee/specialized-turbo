@@ -25,6 +25,7 @@ classifiers = [
 ]
 dependencies = [
     "bleak>=0.21.0",
+    "cryptography>=41.0.0",
 ]
 
 [project.optional-dependencies]

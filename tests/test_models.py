@@ -15,6 +15,7 @@ from specialized_turbo.protocol import (
     BatteryChannel,
     BikeSettingsChannel,
     MotorChannel,
+    ParsedMessage,
     parse_message,
 )
 
@@ -171,8 +172,8 @@ class TestTelemetrySnapshot:
         snap.update_from_message(parse_message(bytes.fromhex("0102ffff")))
         assert snap.motor.speed_kmh == pytest.approx(25.0)  # unchanged
 
-    def test_gen1_mixed_valid_and_stripped(self):
-        """Simulate Gen 1 scenario: some fields valid, others all-0xFF."""
+    def test_tcu1_mixed_valid_and_stripped(self):
+        """Simulate TCU1 scenario: some fields valid, others all-0xFF."""
         snap = TelemetrySnapshot()
         # Valid battery temp (1 byte, not all-FF)
         snap.update_from_message(parse_message(bytes.fromhex("000312")))  # 18°C
@@ -189,8 +190,8 @@ class TestTelemetrySnapshot:
         assert snap.motor.speed_kmh is None
         assert snap.message_count == 4
 
-    def test_gen1_peak_assist_single_byte(self):
-        """Gen 1 peak_assist stores single-byte values (not 3-byte tuple)."""
+    def test_tcu1_peak_assist_single_byte(self):
+        """TCU1 peak_assist stores single-byte values (not 3-byte tuple)."""
         snap = TelemetrySnapshot()
         # 01 10 1A FF FF... → stripped to 1 byte → raw 0x1A=26
         data = bytes.fromhex("01101A" + "ff" * 17)
@@ -243,3 +244,119 @@ class TestTelemetrySnapshot:
         assert snap.settings.assist_lev1_pct == 10
         assert snap.settings.assist_lev2_pct == 20
         assert snap.settings.assist_lev3_pct == 50
+
+
+# ======================================================================
+# TCX field-name routing
+# ======================================================================
+
+
+class TestTCXFieldNameRouting:
+    """TCX2+ messages route via field_name when sender/channel don't match."""
+
+    def _tcx_msg(self, field_name: str, value: float | int) -> ParsedMessage:
+        """Build a ParsedMessage like parse_tcx_message() would."""
+
+        return ParsedMessage(
+            sender=0xFF,  # synthetic sender (won't match any Sender enum)
+            channel=0xFF,  # synthetic channel
+            raw_value=0,
+            converted_value=value,
+            field_name=field_name,
+            unit="",
+        )
+
+    def test_battery_charge_routes_by_name(self):
+        snap = TelemetrySnapshot()
+        snap.update_from_message(self._tcx_msg("battery_charge_percent", 85))
+        assert snap.battery.charge_pct == 85
+        assert len(snap.unknown_messages) == 0
+
+    def test_speed_routes_by_name(self):
+        snap = TelemetrySnapshot()
+        snap.update_from_message(self._tcx_msg("speed", 25.0))
+        assert snap.motor.speed_kmh == 25.0
+
+    def test_cadence_routes_by_name(self):
+        snap = TelemetrySnapshot()
+        snap.update_from_message(self._tcx_msg("cadence", 81.2))
+        assert snap.motor.cadence_rpm == pytest.approx(81.2)
+
+    def test_motor_power_routes_by_name(self):
+        snap = TelemetrySnapshot()
+        snap.update_from_message(self._tcx_msg("motor_power", 200))
+        assert snap.motor.motor_power_w == 200
+
+    def test_rider_power_routes_by_name(self):
+        snap = TelemetrySnapshot()
+        snap.update_from_message(self._tcx_msg("rider_power", 150))
+        assert snap.motor.rider_power_w == 150
+
+    def test_battery2_routes_by_name(self):
+        snap = TelemetrySnapshot()
+        snap.update_from_message(self._tcx_msg("battery2_charge_percent", 60))
+        assert snap.battery2.charge_pct == 60
+
+    def test_odometer_routes_by_name(self):
+        snap = TelemetrySnapshot()
+        snap.update_from_message(self._tcx_msg("odometer", 3789.214))
+        assert snap.motor.odometer_km == pytest.approx(3789.214)
+
+    def test_assist_level_routes_by_name(self):
+        snap = TelemetrySnapshot()
+        snap.update_from_message(self._tcx_msg("assist_level", 2))
+        assert snap.motor.assist_level == 2
+
+    def test_wheel_circumference_routes_by_name(self):
+        snap = TelemetrySnapshot()
+        snap.update_from_message(self._tcx_msg("wheel_circumference", 2300))
+        assert snap.settings.wheel_circumference_mm == 2300
+
+    def test_acceleration_routes_by_name(self):
+        snap = TelemetrySnapshot()
+        snap.update_from_message(self._tcx_msg("acceleration", 20.0))
+        assert snap.settings.acceleration_pct == 20.0
+
+    def test_unknown_field_name_goes_to_unknown(self):
+        snap = TelemetrySnapshot()
+        snap.update_from_message(self._tcx_msg("some_future_field", 42))
+        assert len(snap.unknown_messages) == 1
+
+    def test_none_field_name_unknown_sender_goes_to_unknown(self):
+
+        snap = TelemetrySnapshot()
+        msg = ParsedMessage(0xFF, 0xFF, 0, 42, None, "")
+        snap.update_from_message(msg)
+        assert len(snap.unknown_messages) == 1
+
+    def test_tcu1_still_routes_by_sender_channel(self):
+        """Existing TCU1 sender/channel routing still works."""
+        snap = TelemetrySnapshot()
+        msg = parse_message(bytes.fromhex("000c34"))  # battery charge 52%
+        snap.update_from_message(msg)
+        assert snap.battery.charge_pct == 52
+        assert len(snap.unknown_messages) == 0
+
+    def test_mixed_tcu1_and_tcx_messages(self):
+        """TCU1 and TCX messages can coexist in the same snapshot."""
+        snap = TelemetrySnapshot()
+        # TCU1 message
+        snap.update_from_message(parse_message(bytes.fromhex("000c34")))
+        # TCX message (field-name routed)
+        snap.update_from_message(self._tcx_msg("speed", 25.0))
+        assert snap.battery.charge_pct == 52
+        assert snap.motor.speed_kmh == 25.0
+        assert snap.message_count == 2
+
+    def test_parse_tcx_message_integration(self):
+        """End-to-end: parse_tcx_message -> update_from_message -> snapshot."""
+        from specialized_turbo.protocol import parse_tcx_message
+
+        snap = TelemetrySnapshot()
+        # BikeParameter 26 (BATTERY1_STATE_OF_CHARGE) = 0x001A, data = 0x34 (52%)
+        payload = b"\x00\x1a\x34" + b"\x00" * 15  # 18 bytes
+        msg = parse_tcx_message(payload)
+        assert msg.field_name == "battery_charge_percent"
+        assert msg.converted_value == 52
+        snap.update_from_message(msg)
+        assert snap.battery.charge_pct == 52

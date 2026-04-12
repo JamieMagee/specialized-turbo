@@ -1,340 +1,487 @@
 # Specialized Turbo BLE protocol reference
 
-> **Two protocol generations** are supported:  
-> - **Gen 2** ("TURBOHMI2017"): Vado, Levo, Creo 2019+ — Nordic manufacturer ID  
-> - **Gen 1** ("GIGATRONIK"): Levo 2018 — Simplo manufacturer ID  
->
-> Both generations share the same message format and field definitions; only the BLE UUIDs and advertisement data differ.  
-> Based on: [Sepp62/LevoEsp32Ble](https://github.com/Sepp62/LevoEsp32Ble) (MIT license)
+Specialized Turbo e-bikes (Vado, Levo, Creo) expose telemetry and configuration over Bluetooth Low Energy. The bike acts as the GATT server; your phone or computer connects as the client.
+
+There are four protocol generations in the wild. They all use the same BLE GATT service and characteristic UUIDs, but differ in how they format messages on the wire:
+
+| Generation | Internal name | Message format |
+| --- | --- | --- |
+| TCU1 | `ProtocolSessionTCU1` | `[sender][channel][data]`, no CRC, no encryption |
+| TCX2 | `ProtocolSessionTCX2` | 2-byte parameter ID + CRC-16 + optional AES-128-CTR |
+| TCX3 | `ProtocolSessionTCX3` | Same wire format as TCX2, different parameter set |
+| TCX4 | `ProtocolSessionTCX4` | Same wire format as TCX2/TCX3, different parameter set |
+
+Three communication patterns exist across all generations:
+
+1. **Notifications** -- the bike pushes telemetry as values change
+2. **Request-read** -- the client asks for a specific value
+3. **Write** -- the client changes settings (assist level, etc.)
 
 ---
 
-## 1. Overview
+## BLE discovery
 
-Specialized Turbo e-bikes use a proprietary BLE GATT protocol. The bike is the GATT server (peripheral) and your phone or computer connects as the client (central).
+All generations advertise with at least one of these manufacturer data payloads:
 
-There are three communication patterns:
+### Nordic (company ID `0x0059`)
 
-1. Notifications (passive): the bike pushes telemetry continuously
-2. Request-read (active query): the client asks for a specific value
-3. Write (commands): the client changes settings like assist level
+TCX2, TCX3, and TCX4 bikes. The payload starts with the ASCII string `"TURBOHMI2017"`:
 
----
-
-## 2. BLE discovery
-
-### Gen 2 advertising data
-
-Gen 2 bikes advertise using Nordic Semiconductor's company ID (`0x0059`) with manufacturer-specific data containing the ASCII string `"TURBOHMI"`:
-
-| Field | Value |
-| --- | --- |
-| Company ID | `0x0059` (Nordic Semiconductor) |
-| Payload bytes [0:8] | `54 55 52 42 4f 48 4d 49` = `"TURBOHMI"` |
-| Payload bytes [8:12] | `32 30 31 37` = `"2017"` |
-| Remaining bytes | Variable (device-specific flags) |
-
-**Full advertising example:**
-
-```plain
+```
 Company ID: 59 00
 Payload:    54 55 52 42 4f 48 4d 49 32 30 31 37 01 00 00 00 00
+            T  U  R  B  O  H  M  I  2  0  1  7
 ```
 
-### Gen 1 advertising data
+### Apple iBeacon (company ID `0x004C`)
 
-Gen 1 bikes (2018 Turbo Levo) advertise using Simplo Technology's company ID (`0x020D`) with device-specific payload data:
+Some bikes put `"TURBOHMI"` inside an iBeacon frame under Apple's company ID instead of Nordic's. The Nordic payload is still present but contains unrelated data. Detection should check all manufacturer data payloads for the `TURBOHMI` magic, not just Nordic's.
 
-| Field | Value |
-| --- | --- |
-| Company ID | `0x020D` (Simplo Technology Co., LTD) |
-| Advertised name | `SPECIALIZED` |
-| Service UUID | `0x1816` (Cycling Speed and Cadence) |
-| Payload | Variable (serial number / firmware string) |
+### Simplo (company ID `0x020D`)
 
-**Full advertising example:**
+TCU1 bikes advertise with Simplo Technology's company ID. The device name is `"SPECIALIZED"` and the service UUID `0x1816` (Cycling Speed and Cadence) may be advertised.
 
-```plain
-Company ID: 0D 02
-Payload:    02 86 57 01 43 39 37 32 37 32 2D 31 30 33 30 ...
-```
-
-> **Note:** Gen 1 notifications are padded with `0xFF` to 20 bytes. The parser ignores trailing bytes.
-
-### Detection algorithm
+### Detection
 
 ```python
+ADVERTISING_MAGIC = b"TURBOHMI"
+
 def detect_generation(manufacturer_data: dict[int, bytes]) -> str | None:
-    # Gen 2: Nordic company ID with TURBOHMI magic
-    payload = manufacturer_data.get(0x0059)
-    if payload is not None and b"TURBOHMI" in payload:
-        return "gen2"
-    # Gen 1: Simplo Technology company ID
+    for payload in manufacturer_data.values():
+        if ADVERTISING_MAGIC in payload:
+            return "tcx"  # TCX2, TCX3, or TCX4
     if 0x020D in manufacturer_data:
-        return "gen1"
+        return "tcu1"
     return None
 ```
 
+The detection tells you TCU1 vs TCX. Telling TCX2 apart from TCX3 or TCX4 requires the identification handshake (section below).
+
 ---
 
-## 3. UUID structure
+## GATT UUIDs
 
-Both generations use the same short IDs for services and characteristics but with different 128-bit UUID bases.
+TCU1 and TCX bikes share the same short IDs for services and characteristics, but with different 128-bit UUID bases.
 
-### Gen 2 UUID base
+### TURBOHMI UUID base (TCX2/TCX3/TCX4)
 
-```plain
+```
 000000xx-3731-3032-494d-484f42525554
 ```
 
-The last 12 bytes (`3731-3032-494d-484f42525554`) decode as ASCII:
+The trailing bytes decode to `TURBOHMI2017` reversed (`7102IMHOBRUT`).
 
-- Hex: `37 31 30 32 49 4d 48 4f 42 52 55 54`
-- ASCII: `7102IMHOBRUT`
-- Reversed: **`TURBOHMI2017`**
+### GIGATRONIK UUID base (TCU1)
 
-### Gen 1 UUID base
-
-```plain
+```
 000000xx-0000-4b49-4e4f-525441474947
 ```
 
-The last 10 bytes (`4b49-4e4f-525441474947`) decode as ASCII:
+The trailing bytes decode to `GIGATRONIK` reversed (`KINORTAGIG`).
 
-- Hex: `4b 49 4e 4f 52 54 41 47 49 47`
-- ASCII: `KINORTAGIG`
-- Reversed: **`GIGATRONIK`** (Gen 1 TCU manufacturer)
+### Services and characteristics
 
-### Services
+| Purpose | Short ID | Properties |
+| --- | --- | --- |
+| Notification data (service) | `0x0003` | |
+| Telemetry notifications | `0x0013` | READ, NOTIFY |
+| Request/query (service) | `0x0001` | |
+| Write request query | `0x0021` | WRITE |
+| Read query response | `0x0011` | READ |
+| Write/commands (service) | `0x0002` | |
+| Send commands | `0x0012` | WRITE |
 
-| Purpose | Short ID | Gen 2 UUID | Gen 1 UUID |
-| --- | --- | --- | --- |
-| **Notification Data** | `0x0003` | `00000003-3731-3032-494d-484f42525554` | `00000003-0000-4b49-4e4f-525441474947` |
-| **Request / Query** | `0x0001` | `00000001-3731-3032-494d-484f42525554` | `00000001-0000-4b49-4e4f-525441474947` |
-| **Write / Commands** | `0x0002` | `00000002-3731-3032-494d-484f42525554` | `00000002-0000-4b49-4e4f-525441474947` |
-
-### Characteristics
-
-| Service | Char Short ID | Gen 2 UUID | Gen 1 UUID | Properties | Purpose |
-| --- | --- | --- | --- | --- | --- |
-| `0x0003` | `0x0013` | `00000013-3731-3032-494d-484f42525554` | `00000013-0000-4b49-4e4f-525441474947` | READ, NOTIFY | Bike pushes telemetry here |
-| `0x0001` | `0x0021` | `00000021-3731-3032-494d-484f42525554` | `00000021-0000-4b49-4e4f-525441474947` | WRITE | Write request query here |
-| `0x0001` | `0x0011` | `00000011-3731-3032-494d-484f42525554` | `00000011-0000-4b49-4e4f-525441474947` | READ | Read query response here |
-| `0x0002` | `0x0012` | `00000012-3731-3032-494d-484f42525554` | `00000012-0000-4b49-4e4f-525441474947` | WRITE | Send commands here |
+Expand short IDs with the appropriate UUID base. For example, characteristic `0x0013` on a TCX2 bike is `00000013-3731-3032-494d-484f42525554`.
 
 ---
 
-## 4. Authentication and pairing
+## Authentication
 
-### Security requirements
+### TCU1
 
-- **MITM protection** enabled
-- **Secure Connections** enabled
-- **IO capability:** Keyboard + Display (passkey entry)
+No authentication. The GATT services are open.
 
-### Pairing flow
+### TCX2+
 
-1. Client connects to the bike via BLE
-2. Client attempts to **read** the notification characteristic (`0x0013`)
-3. This triggers the BLE pairing/bonding process
-4. The bike's **TCU** (Turbo Connect Unit) display shows a 6-digit numeric PIN
-5. Client enters this PIN to complete pairing
-6. Subsequent connections may use bonded keys (implementation-dependent)
+MITM protection and Secure Connections are required. The pairing flow:
 
-### Connection parameters
+1. Connect to the bike over BLE
+2. Read the notification characteristic (`0x0013`) -- this triggers pairing
+3. The bike's TCU shows a 6-digit PIN (passkey entry)
+4. Enter the PIN to complete pairing
+5. Bonded keys may be reused for subsequent connections
 
-The bike requests:
-
-- Interval: 25–50 ms (20–40 in 1.25ms units)
-- Latency: 4
-- Supervision timeout: 4000 ms
+Some newer bikes use **numeric comparison** instead of passkey entry. The bike and the client both display a number and the user confirms they match. Bleak doesn't fully support this yet ([hbldh/bleak#1864](https://github.com/hbldh/bleak/pull/1864)), so on those bikes you need to pair through the OS first.
 
 ---
 
-## 5. Message format
+## TCU1 message format
 
-All messages (notifications, read responses, write commands) use the same structure:
+TCU1 uses a straightforward byte layout with no framing:
 
-```plain
-[sender: 1 byte] [channel: 1 byte] [data: 1–4 bytes]
+```
+[sender: 1 byte] [channel: 1 byte] [data: 1-4 bytes, little-endian]
 ```
 
-- **Sender** identifies the subsystem (battery, motor, settings)
-- **Channel** identifies the specific data field within that subsystem
-- **Data** is in **little-endian** byte order
-- Maximum observed length: 20 bytes (BLE ATT MTU)
+TCU1 notifications are padded with `0xFF` to 20 bytes. The parser strips trailing `0xFF`.
 
-### Integer extraction (little-endian)
-
-| Size | Formula |
-| --- | --- |
-| 1 byte | `data[2]` |
-| 2 bytes | `data[2] + (data[3] << 8)` |
-| 4 bytes | `data[2] + (data[3] << 8) + (data[4] << 16) + (data[5] << 24)` |
-
----
-
-## 6. Senders
+### Senders
 
 | Value | Name | Description |
 | --- | --- | --- |
-| `0x00` | BATTERY | Main battery pack |
-| `0x01` | MOTOR | Motor controller / rider data |
+| `0x00` | BATTERY | Main battery |
+| `0x01` | MOTOR | Motor controller and rider data |
 | `0x02` | BIKE_SETTINGS | Bike configuration |
-| `0x03` | UNKNOWN | (undocumented) |
+| `0x03` | (unknown) | Undocumented |
 | `0x04` | BATTERY_2 | Secondary / range-extender battery (same channels as `0x00`) |
 
+### Battery fields (sender `0x00` and `0x04`)
+
+| Channel | Name | Size | Conversion | Unit | Example |
+| --- | --- | --- | --- | --- | --- |
+| `0x00` | Capacity | 2B | `round(raw * 1.1111)` | Wh | `00 00 c2 01` = 500 Wh |
+| `0x01` | Remaining | 2B | `round(raw * 1.1111)` | Wh | `00 01 e4 00` = 253 Wh |
+| `0x02` | Health | 1B | direct | % | `00 02 64` = 100% |
+| `0x03` | Temperature | 1B | direct | C | `00 03 13` = 19 C |
+| `0x04` | Charge cycles | 2B | direct | count | `00 04 0d 00` = 13 |
+| `0x05` | Voltage | 1B | `raw / 5 + 20` | V | `00 05 50` = 36.0 V |
+| `0x06` | Current | 1B | `raw / 5` | A | `00 06 00` = 0.0 A |
+| `0x0C` | State of charge | 1B | direct | % | `00 0c 34` = 52% |
+
+The voltage and current conversion formulas are approximate (noted in the Sepp62 reference). The 1.1111 Wh multiplier may vary by battery pack.
+
+### Motor / rider fields (sender `0x01`)
+
+| Channel | Name | Size | Conversion | Unit | Example |
+| --- | --- | --- | --- | --- | --- |
+| `0x00` | Rider power | 2B | direct | W | `01 00 c8 00` = 200 W |
+| `0x01` | Cadence | 2B | `raw / 10` | RPM | `01 01 2c 03` = 81.2 RPM |
+| `0x02` | Speed | 2B | `raw / 10` | km/h | `01 02 fa 00` = 25.0 km/h |
+| `0x04` | Odometer | 4B | `raw / 1000` | km | `01 04 9e d1 39 00` = 3789.214 km |
+| `0x05` | Assist level | 2B | enum (0=OFF, 1=ECO, 2=TRAIL, 3=TURBO) | | `01 05 02 00` = TRAIL |
+| `0x07` | Motor temp | 1B | direct | C | `01 07 19` = 25 C |
+| `0x0C` | Motor power | 2B | direct | W | `01 0c 64 00` = 100 W |
+| `0x10` | Peak assist | 3B | three 1-byte values | % | `01 10 0a 14 32` = ECO=10%, TRAIL=20%, TURBO=50% |
+| `0x15` | Shuttle | 1B | direct | | `01 15 00` = 0 |
+
+### Bike settings fields (sender `0x02`)
+
+| Channel | Name | Size | Conversion | Unit | Example |
+| --- | --- | --- | --- | --- | --- |
+| `0x00` | Wheel circumference | 2B | direct | mm | `02 00 fc 08` = 2300 mm |
+| `0x03` | Assist lev 1 (ECO) | 1B | direct | % | `02 03 0a` = 10% |
+| `0x04` | Assist lev 2 (TRAIL) | 1B | direct | % | `02 04 14` = 20% |
+| `0x05` | Assist lev 3 (TURBO) | 1B | direct | % | `02 05 32` = 50% |
+| `0x06` | Fake channel | 1B | bit-coded | | `02 06 00` = 0 |
+| `0x07` | Acceleration | 2B | `(raw - 3000) / 60` | % | `02 07 a0 0f` = 16.67% |
+
+Acceleration raw range is 3000-9000, mapping to 0-100%.
+
 ---
 
-## 7. Data fields
+## TCX2+ message format
 
-### 7.1 Battery (sender 0x00 / 0x04)
+TCX2, TCX3, and TCX4 all use the same 20-byte packet format. The difference between generations is which `BikeParameter` IDs the bike supports -- the framing is identical.
 
-| Channel | Name | Size | Conversion | Unit | Example Hex | Example Value |
-| --- | --- | --- | --- | --- | --- | --- |
-| `0x00` | Capacity | 2B | `raw × 1.1111` (round) | Wh | `00 00 c2 01` | 500 Wh |
-| `0x01` | Remaining | 2B | `raw × 1.1111` (round) | Wh | `00 01 e4 00` | 253 Wh |
-| `0x02` | Health | 1B | direct | % | `00 02 64` | 100% |
-| `0x03` | Temperature | 1B | direct | °C | `00 03 13` | 19°C |
-| `0x04` | Charge Cycles | 2B | direct | count | `00 04 0d 00` | 13 |
-| `0x05` | Voltage | 1B | `raw ÷ 5 + 20` | V | `00 05 50` | 36.0 V |
-| `0x06` | Current | 1B | `raw ÷ 5` | A | `00 06 00` | 0.0 A |
-| `0x0C` | State of Charge | 1B | direct | % | `00 0c 34` | 52% |
+### Packet layout
 
-> **Note:** Voltage/current conversion formulas may be approximate.
+```
+[payload: 18 bytes] [CRC-16: 2 bytes little-endian]
+```
 
-### 7.2 Motor / rider (sender 0x01)
+Total: always 20 bytes (the BLE ATT MTU).
 
-| Channel | Name | Size | Conversion | Unit | Example Hex | Example Value |
-| --- | --- | --- | --- | --- | --- | --- |
-| `0x00` | Rider Power | 2B | direct | W | `01 00 c8 00` | 200 W |
-| `0x01` | Cadence | 2B | `raw ÷ 10` | RPM | `01 01 2c 03` | 81.2 RPM |
-| `0x02` | Speed | 2B | `raw ÷ 10` | km/h | `01 02 fa 00` | 25.0 km/h |
-| `0x04` | Odometer | 4B | `raw ÷ 1000` | km | `01 04 9e d1 39 00` | 3789.214 km |
-| `0x05` | Assist Level | 2B | enum | — | `01 05 02 00` | TRAIL |
-| `0x07` | Motor Temp | 1B | direct | °C | `01 07 19` | 25°C |
-| `0x0C` | Motor Power | 2B | direct | W | `01 0c 64 00` | 100 W |
-| `0x10` | Peak Assist | 3B | 3 × 1-byte | % | `01 10 0a 14 32` | ECO=10, TRAIL=20, TURBO=50 |
-| `0x15` | Shuttle | 1B | direct | — | `01 15 00` | 0 |
+The payload contains:
 
-#### Assist Level Enum
+```
+[param_id: 2 bytes big-endian] [data: 0-16 bytes little-endian] [zero padding]
+```
 
-| Value | Name |
+The parameter ID is a 16-bit value from the `BikeParameter` enum (352 known values). It replaces the TCU1 sender/channel pair -- there's no sender byte, just a flat ID namespace.
+
+### Processing pipeline
+
+Outgoing (client to bike):
+
+```
+raw payload --> zero-pad to 18 bytes --> CRC-16 append --> AES-CTR encrypt --> BLE write
+```
+
+Incoming (bike to client):
+
+```
+BLE notify --> AES-CTR decrypt --> CRC-16 validate and strip --> parse parameter
+```
+
+Encryption is optional. Some older TCX2 bikes and all TCU1 bikes work without it. Whether encryption is needed depends on the identification handshake.
+
+---
+
+## CRC-16 framing
+
+All TCX2+ packets carry a CRC-16 for integrity checking.
+
+- **Algorithm**: CRC-16/CCITT-FALSE
+- **Polynomial**: 0x1021
+- **Initial value**: 0xFFFF
+- **Final XOR**: none
+- **Byte order**: the 2-byte CRC is stored **little-endian** at the end of the packet
+- **Python**: `binascii.crc_hqx(data, 0xFFFF)` from the standard library
+
+### Example
+
+The packet `f8ff000c0500000000000000000000000000e6ca` breaks down as:
+
+```
+Payload (18 bytes): f8 ff 00 0c 05 00 00 00 00 00 00 00 00 00 00 00 00 00
+CRC-16 (LE):        e6 ca  (0xCAE6)
+```
+
+Verifying: `crc_hqx(bytes.fromhex("f8ff000c0500000000000000000000000000"), 0xFFFF)` gives `0xCAE6`.
+
+In that packet, the first two payload bytes (`F8 FF`) happen to look like a magic header, but they're actually a parameter ID. The correct detection method is CRC validation, not byte-matching.
+
+---
+
+## AES-128-CTR encryption
+
+Some TCX2+ bikes encrypt notifications and request-read responses with AES-128-CTR. The encryption key is exchanged during the identification handshake.
+
+### Encrypted packet layout
+
+```
+[param_id: 2 bytes, CLEAR] [body: 18 bytes, ENCRYPTED]
+```
+
+The first two bytes (the parameter ID) are always in the clear. Bytes 2-19 are AES-128-CTR encrypted. Since CTR mode is symmetric, the same operation encrypts and decrypts.
+
+### Packets that skip encryption
+
+Even when encryption is active, these packets are always sent in the clear:
+
+- **NAK**: a single `0x0A` byte (negative acknowledgment)
+- **F8 FF prefix**: packets whose parameter ID is `0xF8FF` (identification / system messages)
+
+### Key derivation
+
+The encryption key comes from the bike's `BTEncryptionInfo`, which is exchanged during identification step 4 (parameter ID 14 / `BATTERY1_FIRMWARE`). The derivation:
+
+1. Start with a 64-character base64-encoded string from the bike
+2. Base64-decode it (yields ~48 raw bytes)
+3. The first 16 bytes are an intermediate AES key
+4. The remaining bytes are AES-CTR decrypted using that intermediate key with a zero IV
+5. The decrypted result is an ASCII hex string
+6. Hex-decode that string to get the final 16-byte AES key
+
+```python
+import base64
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+def derive_key(base64_key: str) -> bytes:
+    raw = base64.b64decode(base64_key)
+    intermediate = raw[:16]
+    encrypted_rest = raw[16:]
+    cipher = Cipher(algorithms.AES(intermediate), modes.CTR(b"\x00" * 16))
+    decryptor = cipher.decryptor()
+    hex_str = decryptor.update(encrypted_rest) + decryptor.finalize()
+    return bytes.fromhex(hex_str.decode("ascii"))
+```
+
+---
+
+## Identification handshake
+
+Before streaming telemetry, TCX2+ bikes require a multi-step identification sequence. Each step reads a specific `BikeParameter` by writing its 2-byte big-endian ID to the request-write characteristic and reading the response.
+
+### Full identification steps (new bike)
+
+| Step | Param ID | Name | Purpose |
+| --- | --- | --- | --- |
+| 1 | 300 | `SYSTEM_GET_NEW_VI` | Trigger identification from scan data |
+| 2 | 310 | `SYSTEM_HMI_HW_VERSION` | HMI hardware version |
+| 3 | 363 | `SYSTEM_STATE` | System state (ready, sleeping, etc.) |
+| 4 | 14 | `BATTERY1_FIRMWARE` | Encryption key exchange |
+| 5 | 308 | `SYSTEM_HMI_HW_VERSION` | Protocol version |
+| 6 | 329 | `SYSTEM_MOTOR_TYPE` | Motor type |
+| 7 | 290 | `SYSTEM_EBIKE_SERIAL_NUMBER` | Serial / battery info |
+
+### Short identification steps (reconnecting to known bike)
+
+| Step | Param ID | Name |
+| --- | --- | --- |
+| 1 | 300 | `SYSTEM_GET_NEW_VI` |
+| 2 | 363 | `SYSTEM_STATE` |
+| 3 | 14 | `BATTERY1_FIRMWARE` (encryption key) |
+
+The identification result determines the bike type, which maps to a protocol generation:
+
+| Bike type | Generation |
 | --- | --- |
-| 0 | OFF |
-| 1 | ECO |
-| 2 | TRAIL |
-| 3 | TURBO |
+| 3 or 4 | TCX2 |
+| 5 or 6 | TCX3 |
+| 7 or 8 | TCX4 |
+| 1 or 2 | TCU1 (legacy) |
 
-### 7.3 Bike settings (sender 0x02)
-
-| Channel | Name | Size | Conversion | Unit | Example Hex | Example Value |
-| --- | --- | --- | --- | --- | --- | --- |
-| `0x00` | Wheel Circumference | 2B | direct | mm | `02 00 fc 08` | 2300 mm |
-| `0x03` | Assist Level 1 (ECO) | 1B | direct | % | `02 03 0a` | 10% |
-| `0x04` | Assist Level 2 (TRAIL) | 1B | direct | % | `02 04 14` | 20% |
-| `0x05` | Assist Level 3 (TURBO) | 1B | direct | % | `02 05 32` | 50% |
-| `0x06` | Fake Channel | 1B | bit-coded | — | `02 06 00` | 0 |
-| `0x07` | Acceleration | 2B | `(raw - 3000) ÷ 60` | % | `02 07 a0 0f` | 16.67% |
-
-> **Acceleration range:** raw 3000–9000 maps to 0–100%.
+Each generation has a range of protocol sub-versions that determine which parameters are available. TCX2 supports versions `0x12` through `0x34`+, TCX3 supports `0x06` through `0x24`+, and TCX4 has its own range.
 
 ---
 
-## 8. Communication patterns
+## TCX2+ telemetry fields
 
-### 8.1 Notifications (passive telemetry)
+The TCX2+ protocol uses 16-bit parameter IDs from the `BikeParameter` enum. There are 352 known parameter IDs. The table below lists the 44 that have telemetry conversion definitions in this library.
 
-1. Subscribe to notifications on characteristic 0x0013 (service 0x0003)
-2. The bike sends messages as data changes
-3. Parse each one using the message format above
-4. You'll get data from all senders: battery, motor, and settings
+Note that conversions differ from TCU1 in several cases. TCX battery voltage and current are 2-byte millivolt/milliamp values (`raw / 1000`), while TCU1 uses 1-byte values with different scaling (`raw / 5 + 20` for voltage, `raw / 5` for current). TCX capacity is direct watt-hours; TCU1 uses a `1.1111` multiplier.
 
-### 8.2 Request-read (active query)
+### Battery 1
 
-To query a specific value:
+| Param ID | Name | Field name | Unit | Size | Conversion |
+| --- | --- | --- | --- | --- | --- |
+| 0 | `BATTERY1_CHARGING_ACTIVE` | `battery_charging_active` | | 1B | direct |
+| 1 | `BATTERY1_CURRENT_LEVEL` | `battery_current` | A | 2B | `raw / 1000` |
+| 15 | `BATTERY1_FULL_CAPACITY` | `battery_capacity_wh` | Wh | 2B | direct |
+| 17 | `BATTERY1_HEALTH` | `battery_health` | % | 1B | direct |
+| 20 | `BATTERY1_ON_BIKE_CHARGE_CYCLES` | `battery_on_bike_charge_cycles` | cycles | 2B | direct |
+| 23 | `BATTERY1_REMAINING_CAPACITY` | `battery_remaining_wh` | Wh | 2B | direct |
+| 26 | `BATTERY1_STATE_OF_CHARGE` | `battery_charge_percent` | % | 1B | direct |
+| 27 | `BATTERY1_TEMPERATURE` | `battery_temp` | C | 1B | direct |
+| 28 | `BATTERY1_TOTAL_CHARGE_CYCLES` | `battery_charge_cycles` | cycles | 2B | direct |
+| 29 | `BATTERY1_VOLTAGE_LEVEL` | `battery_voltage` | V | 2B | `raw / 1000` |
 
-1. Write 2 bytes `[sender, channel]` to characteristic 0x0021 (service 0x0001)
-2. Read the response from characteristic 0x0011 (service 0x0001)
-3. Response follows the standard format: `[sender, channel, data...]`
-4. Check the first 2 bytes match your request
+### Battery 2
 
-The reference implementation unsubscribes from notifications before doing request-read, since they can interfere on the same connection.
+| Param ID | Name | Field name | Unit | Size | Conversion |
+| --- | --- | --- | --- | --- | --- |
+| 31 | `BATTERY2_CURRENT_LEVEL` | `battery2_current` | A | 2B | `raw / 1000` |
+| 44 | `BATTERY2_FULL_CAPACITY` | `battery2_capacity_wh` | Wh | 2B | direct |
+| 46 | `BATTERY2_HEALTH` | `battery2_health` | % | 1B | direct |
+| 51 | `BATTERY2_REMAINING_CAPACITY` | `battery2_remaining_wh` | Wh | 2B | direct |
+| 54 | `BATTERY2_STATE_OF_CHARGE` | `battery2_charge_percent` | % | 1B | direct |
+| 55 | `BATTERY2_TEMPERATURE` | `battery2_temp` | C | 1B | direct |
+| 56 | `BATTERY2_TOTAL_CHARGE_CYCLES` | `battery2_charge_cycles` | cycles | 2B | direct |
+| 57 | `BATTERY2_VOLTAGE_LEVEL` | `battery2_voltage` | V | 2B | `raw / 1000` |
 
-### 8.3 Write commands
+### Motor and rider
 
-Write command bytes to characteristic 0x0012 (service 0x0002).
+| Param ID | Name | Field name | Unit | Size | Conversion |
+| --- | --- | --- | --- | --- | --- |
+| 139 | `MOTOR_ACCELERATION_RESPONSE` | `acceleration` | % | 2B | `(raw - 3000) / 60` |
+| 143 | `MOTOR_ACTIVE_TRAVEL_MODE` | `assist_level` | | 1B | direct |
+| 147 | `MOTOR_BIKE_CADENCE` | `cadence` | RPM | 2B | `raw / 10` |
+| 148 | `MOTOR_BIKE_SPEED` | `speed` | km/h | 2B | `raw / 10` |
+| 181 | `MOTOR_MAX_SPEED_LIMIT` | `max_speed_limit` | km/h | 2B | `raw / 10` |
+| 182 | `MOTOR_ODOMETER` | `odometer` | km | 4B | `raw / 1000` |
+| 186 | `MOTOR_POWER` | `motor_power` | W | 2B | direct |
+| 191 | `MOTOR_RIDER_INPUT_POWER` | `rider_power` | W | 2B | direct |
+| 196 | `MOTOR_TEMPERATURE` | `motor_temp` | C | 1B | direct |
+| 203 | `MOTOR_WHEEL_SIZE` | `wheel_circumference` | mm | 2B | direct |
 
-#### Set Assist Level
+### System
 
-```plain
-Bytes: [0x01] [0x05] [level]
+| Param ID | Name | Field name | Unit | Size | Conversion |
+| --- | --- | --- | --- | --- | --- |
+| 242 | `SYSTEM_ALT` | `altitude` | m | 2B | direct |
+| 244 | `SYSTEM_ALT_DESCENT` | `altitude_descent` | m | 2B | direct |
+| 245 | `SYSTEM_ALT_GAIN` | `altitude_gain` | m | 2B | direct |
+| 279 | `SYSTEM_CONSUMPTION` | `consumption` | Wh/km | 2B | direct |
+| 302 | `SYSTEM_GRADIENT` | `gradient` | % | 2B | `raw / 10` |
+| 320 | `SYSTEM_KCAL` | `kcal` | kcal | 2B | direct |
+| 341 | `SYSTEM_RANGE_LONG` | `range_long` | km | 2B | `raw / 10` |
+| 342 | `SYSTEM_RANGE_SHORT` | `range_short` | km | 2B | `raw / 10` |
+| 343 | `SYSTEM_RANGE_TREND` | `range_trend` | | 1B | direct |
+| 363 | `SYSTEM_STATE` | `system_state` | | 1B | direct |
+| 371 | `SYSTEM_TEMPERATURE` | `system_temp` | C | 1B | direct |
+
+### Identification parameters
+
+These are read during the identification handshake, not during normal telemetry:
+
+| Param ID | Name | Field name | Size |
+| --- | --- | --- | --- |
+| 271 | `SYSTEM_BIKE_TYPE` | `bike_type` | 1B |
+| 290 | `SYSTEM_EBIKE_SERIAL_NUMBER` | `ebike_serial` | 16B |
+| 308 | `SYSTEM_HMI_HW_VERSION` | `hmi_hw_version` | 4B |
+| 314 | `SYSTEM_HMI_SW_VERSION` | `hmi_sw_version` | 4B |
+| 329 | `SYSTEM_MOTOR_TYPE` | `motor_type` | 1B |
+
+The full set of 352 `BikeParameter` IDs is defined in `parameters.py`. Most are for diagnostics, DFU (firmware updates), or subsystems like Shimano electronic shifting, Enviolo hubs, radar, and locks that this library doesn't parse yet.
+
+---
+
+## Communication patterns
+
+### Notifications
+
+1. Subscribe to notifications on characteristic `0x0013` (service `0x0003`)
+2. The bike sends messages when values change
+3. On TCU1: parse with `[sender][channel][data]` format
+4. On TCX2+: decrypt if needed, validate CRC, parse with `[param_id][data]` format
+
+### Request-read
+
+1. Write 2 bytes to characteristic `0x0021` (service `0x0001`)
+   - TCU1: `[sender, channel]`
+   - TCX2+: `[param_id_hi, param_id_lo]` (big-endian)
+2. Read the response from characteristic `0x0011`
+3. Verify the first 2 bytes match your request
+
+The Sepp62 reference code unsubscribes from notifications before doing request-reads since they can interfere on the same connection.
+
+### Write commands (TCU1)
+
+Write command bytes to characteristic `0x0012` (service `0x0002`). These are documented for TCU1; TCX2+ write commands use the parameter ID system but the format is otherwise similar.
+
+Set assist level:
+
+```
+01 05 [level]
 level: 0=OFF, 1=ECO, 2=TRAIL, 3=TURBO
 ```
 
-#### Set Assist Percentage Per Level
+Set assist percentage per level:
 
-```plain
-Bytes: [0x02] [0x03+i] [value]
+```
+02 [03+i] [value]
 i: 0=ECO, 1=TRAIL, 2=TURBO
-value: 0–100 (percent)
+value: 0-100
 ```
 
-#### Set Peak Assist (All Levels at Once)
+Set peak assist (all levels at once):
 
-```plain
-Bytes: [0x01] [0x10] [eco%] [trail%] [turbo%] [0x32]
+```
+01 10 [eco%] [trail%] [turbo%] 32
 ```
 
-#### Set Acceleration Sensitivity
+Set acceleration:
 
-```plain
-Bytes: [0x02] [0x07] [low_byte] [high_byte]
-Raw value = (sensitivity × 60) + 3000
-Sent as 16-bit little-endian
-Range: 3000 (0%) to 9000 (100%)
+```
+02 07 [low] [high]
+raw = (sensitivity * 60) + 3000, sent as 16-bit little-endian
+range: 3000 (0%) to 9000 (100%)
 ```
 
-#### Set Shuttle
+Set shuttle:
 
-```plain
-Bytes: [0x01] [0x15] [value]
-value: 0–100
+```
+01 15 [value]
+value: 0-100
 ```
 
 ---
 
-## 9. Known quirks
+## Quirks
 
-1. Message 0x02 0x27: undocumented, but when it arrives, notifications pause briefly. The reference code uses this window to do an async read of battery capacity.
+1. **Message `0x02 0x27`**: undocumented, but when it arrives on TCU1, notifications pause briefly. The Sepp62 reference uses this window to sneak in a request-read for battery capacity.
 
-2. Request-read interference: do request-read operations while notifications are paused to avoid garbled responses.
+2. **Request-read interference**: on TCU1, do request-reads while notifications are paused to avoid garbled responses.
 
-3. Voltage/current formulas: the conversions (raw/5+20 for voltage, raw/5 for current) are noted as approximate in the reference implementation.
+3. **TCU1 voltage/current formulas**: the conversions (`raw/5+20` for voltage, `raw/5` for current) are noted as approximate in the Sepp62 source. TCX2+ uses millivolt/milliamp values directly, which avoids this ambiguity.
 
-4. Battery Wh factor: the 1.1111 multiplier for Wh values may vary across battery pack configurations.
-
-5. Bonding: the reference ESP32 code doesn't implement BLE bonding (the flag is commented out), so it re-pairs every time.
+4. **TCU1 battery Wh factor**: the `1.1111` multiplier may vary across battery packs. TCX2+ reports Wh directly.
 
 ---
 
-## 10. Protocol generations
+## References
 
-There is an older protocol generation used by ~2015 Specialized bikes:
-
-| Attribute | Gen 1 (GIGATRONIK) | Gen 2 (TURBOHMI2017) |
-| --- | --- | --- |
-| UUID Base | `0000xxxx-0000-4b49-4e4f-525441474947` | `000000xx-3731-3032-494d-484f42525554` |
-| Device Name | `"SPECIALIZED"` | (uses manufacturer data) |
-| Auth | None (open GATT) | MITM + Secure Connections + Passkey |
-| Models | 2015 Turbo Levo | 2017+ Turbo Vado, Levo, Creo |
-
-This library implements **Gen 2 only**.
-
----
-
-## 11. References
-
-- [Sepp62/LevoEsp32Ble](https://github.com/Sepp62/LevoEsp32Ble) — Primary source (C++/ESP32, MIT)
-- [Micheledv74/turbolevo-pwa](https://github.com/Micheledv74/turbolevo-pwa) — Web Bluetooth dashboard (Gen 1)
-- [paolovsrl/specialized_ble](https://github.com/paolovsrl/specialized_ble) — ESP-IDF client (Gen 1)
+- [Sepp62/LevoEsp32Ble](https://github.com/Sepp62/LevoEsp32Ble) -- C++/ESP32 implementation (MIT). Primary source for TCU1 protocol details.
+- [Micheledv74/turbolevo-pwa](https://github.com/Micheledv74/turbolevo-pwa) -- Web Bluetooth dashboard (TCU1)
+- [paolovsrl/specialized_ble](https://github.com/paolovsrl/specialized_ble) -- ESP-IDF client (TCU1)

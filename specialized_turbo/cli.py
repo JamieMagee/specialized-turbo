@@ -137,6 +137,63 @@ async def _cmd_read(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# write
+# ---------------------------------------------------------------------------
+
+# Writable fields: name → (sender, channel, FieldDefinition)
+_WRITABLE_FIELD_MAP: dict[str, tuple[int, int]] = {}
+for _key, _fd in all_field_defs().items():
+    if _fd.writable:
+        _WRITABLE_FIELD_MAP[_fd.name] = _key
+
+
+async def _cmd_write(args: argparse.Namespace) -> None:
+    """Connect, write a value, and disconnect."""
+    field_name = args.field
+
+    if field_name == "list":
+        print("Writable fields:\n")
+        for name, (sender, channel) in sorted(_WRITABLE_FIELD_MAP.items()):
+            fd = all_field_defs()[(sender, channel)]
+            print(
+                f"  {name:<28s}  (sender=0x{sender:02x} channel=0x{channel:02x})  [{fd.unit}]"
+            )
+        return
+
+    if field_name not in _WRITABLE_FIELD_MAP:
+        print(f"Unknown or read-only field: {field_name}")
+        print("Use 'write list' to see writable fields.")
+        sys.exit(1)
+
+    if args.value is None or args.address is None:
+        print("Usage: specialized-turbo write <field> <value> <address>")
+        sys.exit(1)
+
+    sender, channel = _WRITABLE_FIELD_MAP[field_name]
+    fd = all_field_defs()[(sender, channel)]
+
+    # Parse and encode the value
+    raw_value = float(args.value) if "." in args.value else int(args.value)
+    if fd.encode is not None:
+        wire_value = fd.encode(raw_value)
+    else:
+        wire_value = int(raw_value)
+
+    from .protocol import build_write_command
+
+    data_bytes = wire_value.to_bytes(fd.data_size, "little")
+    command = build_write_command(sender, channel, data_bytes)
+
+    print(f"Connecting to {args.address} to write '{field_name}' = {raw_value} ...")
+
+    async with SpecializedConnection(args.address, pin=args.pin) as conn:
+        await conn.write_command(command)
+        print(
+            f"Wrote {field_name} = {raw_value} (raw: {wire_value}, bytes: {command.hex()})"
+        )
+
+
+# ---------------------------------------------------------------------------
 # services (debug helper)
 # ---------------------------------------------------------------------------
 
@@ -187,7 +244,7 @@ def main(argv: list[str] | None = None) -> None:
     # --- telemetry ---
     p_tel = sub.add_parser("telemetry", help="Stream live telemetry")
     p_tel.add_argument("address", help="BLE MAC address (e.g. DC:DD:BB:4A:D6:55)")
-    p_tel.add_argument("-p", "--pin", type=int, default=None, help="Pairing PIN")
+    p_tel.add_argument("-p", "--pin", type=str, default=None, help="Pairing PIN")
     p_tel.add_argument(
         "-d",
         "--duration",
@@ -203,13 +260,23 @@ def main(argv: list[str] | None = None) -> None:
     )
     p_read.add_argument("field", help="Field name or 'list'")
     p_read.add_argument("address", nargs="?", default=None, help="BLE MAC address")
-    p_read.add_argument("-p", "--pin", type=int, default=None, help="Pairing PIN")
+    p_read.add_argument("-p", "--pin", type=str, default=None, help="Pairing PIN")
     p_read.add_argument("-f", "--format", choices=["table", "json"], default="table")
 
     # --- services ---
     p_svc = sub.add_parser("services", help="Enumerate GATT services (debug)")
     p_svc.add_argument("address", help="BLE MAC address")
-    p_svc.add_argument("-p", "--pin", type=int, default=None, help="Pairing PIN")
+    p_svc.add_argument("-p", "--pin", type=str, default=None, help="Pairing PIN")
+
+    # --- write ---
+    p_write = sub.add_parser(
+        "write",
+        help="Write a value to the bike (use 'write list' to see writable fields)",
+    )
+    p_write.add_argument("field", help="Field name or 'list'")
+    p_write.add_argument("value", nargs="?", default=None, help="Value to write")
+    p_write.add_argument("address", nargs="?", default=None, help="BLE MAC address")
+    p_write.add_argument("-p", "--pin", type=str, default=None, help="Pairing PIN")
 
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
@@ -219,6 +286,7 @@ def main(argv: list[str] | None = None) -> None:
         "telemetry": _cmd_telemetry,
         "read": _cmd_read,
         "services": _cmd_services,
+        "write": _cmd_write,
     }[args.command](args)
 
     try:

@@ -7,7 +7,7 @@ Quick start::
     from specialized_turbo import SpecializedConnection, TelemetryMonitor
 
     async def main():
-        async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin=946166) as conn:
+        async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
             monitor = TelemetryMonitor(conn)
             await monitor.start()
 
@@ -17,8 +17,10 @@ Quick start::
     asyncio.run(main())
 """
 
+from __future__ import annotations
+
 from .protocol import (
-    # UUIDs (Gen 2 defaults)
+    # UUIDs (TCX defaults)
     SERVICE_DATA_NOTIFY as SERVICE_DATA_NOTIFY,
     SERVICE_DATA_REQUEST as SERVICE_DATA_REQUEST,
     SERVICE_DATA_WRITE as SERVICE_DATA_WRITE,
@@ -26,16 +28,16 @@ from .protocol import (
     CHAR_REQUEST_READ as CHAR_REQUEST_READ,
     CHAR_REQUEST_WRITE as CHAR_REQUEST_WRITE,
     CHAR_WRITE as CHAR_WRITE,
-    # Gen 1 UUIDs
-    SERVICE_DATA_NOTIFY_GEN1 as SERVICE_DATA_NOTIFY_GEN1,
-    SERVICE_DATA_REQUEST_GEN1 as SERVICE_DATA_REQUEST_GEN1,
-    SERVICE_DATA_WRITE_GEN1 as SERVICE_DATA_WRITE_GEN1,
-    CHAR_NOTIFY_GEN1 as CHAR_NOTIFY_GEN1,
-    CHAR_REQUEST_READ_GEN1 as CHAR_REQUEST_READ_GEN1,
-    CHAR_REQUEST_WRITE_GEN1 as CHAR_REQUEST_WRITE_GEN1,
-    CHAR_WRITE_GEN1 as CHAR_WRITE_GEN1,
+    # TCU1 UUIDs
+    SERVICE_DATA_NOTIFY_TCU1 as SERVICE_DATA_NOTIFY_TCU1,
+    SERVICE_DATA_REQUEST_TCU1 as SERVICE_DATA_REQUEST_TCU1,
+    SERVICE_DATA_WRITE_TCU1 as SERVICE_DATA_WRITE_TCU1,
+    CHAR_NOTIFY_TCU1 as CHAR_NOTIFY_TCU1,
+    CHAR_REQUEST_READ_TCU1 as CHAR_REQUEST_READ_TCU1,
+    CHAR_REQUEST_WRITE_TCU1 as CHAR_REQUEST_WRITE_TCU1,
+    CHAR_WRITE_TCU1 as CHAR_WRITE_TCU1,
     # Generation-aware UUID helpers
-    ProtocolGeneration as ProtocolGeneration,
+    BLEProfile as BLEProfile,
     get_uuid as get_uuid,
     get_char_notify as get_char_notify,
     get_char_request_read as get_char_request_read,
@@ -55,8 +57,9 @@ from .protocol import (
     get_field_def as get_field_def,
     all_field_defs as all_field_defs,
     build_request as build_request,
+    build_write_command as build_write_command,
     is_specialized_advertisement as is_specialized_advertisement,
-    GEN1_POLL_FIELDS as GEN1_POLL_FIELDS,
+    TCU1_POLL_FIELDS as TCU1_POLL_FIELDS,
     # Company IDs
     NORDIC_COMPANY_ID as NORDIC_COMPANY_ID,
     APPLE_COMPANY_ID as APPLE_COMPANY_ID,
@@ -66,6 +69,7 @@ from .models import (
     BatteryState as BatteryState,
     MotorState as MotorState,
     BikeSettings as BikeSettings,
+    SystemState as SystemState,
     TelemetrySnapshot as TelemetrySnapshot,
 )
 from .connection import (
@@ -77,9 +81,39 @@ from .telemetry import (
     TelemetryMonitor as TelemetryMonitor,
     run_telemetry_session as run_telemetry_session,
 )
+from .framing import (
+    compute_crc16_ccitt as compute_crc16_ccitt,
+    pack_tcx as pack_tcx,
+    unpack_tcx as unpack_tcx,
+    is_framed_packet as is_framed_packet,
+)
+from .parameters import (
+    BikeParameter as BikeParameter,
+    TCXFieldDefinition as TCXFieldDefinition,
+    get_tcx_field as get_tcx_field,
+    all_tcx_fields as all_tcx_fields,
+    encode_parameter_id as encode_parameter_id,
+    decode_parameter_id as decode_parameter_id,
+)
+from .encryption import (
+    encrypt_packet as encrypt_packet,
+    decrypt_packet as decrypt_packet,
+    derive_key as derive_key,
+    is_encryptable as is_encryptable,
+)
+from .session import (
+    ProtocolSession as ProtocolSession,
+    TCU1Session as TCU1Session,
+    TCXSession as TCXSession,
+)
+from .protocol import (
+    parse_tcx_message as parse_tcx_message,
+    build_tcx_request as build_tcx_request,
+    build_tcx_write as build_tcx_write,
+)
 
 __all__ = [
-    # Protocol — Gen 2 UUIDs (backward-compatible defaults)
+    # Protocol — TCX UUIDs (backward-compatible defaults)
     "SERVICE_DATA_NOTIFY",
     "SERVICE_DATA_REQUEST",
     "SERVICE_DATA_WRITE",
@@ -87,16 +121,16 @@ __all__ = [
     "CHAR_REQUEST_READ",
     "CHAR_REQUEST_WRITE",
     "CHAR_WRITE",
-    # Protocol — Gen 1 UUIDs
-    "SERVICE_DATA_NOTIFY_GEN1",
-    "SERVICE_DATA_REQUEST_GEN1",
-    "SERVICE_DATA_WRITE_GEN1",
-    "CHAR_NOTIFY_GEN1",
-    "CHAR_REQUEST_READ_GEN1",
-    "CHAR_REQUEST_WRITE_GEN1",
-    "CHAR_WRITE_GEN1",
+    # Protocol — TCU1 UUIDs
+    "SERVICE_DATA_NOTIFY_TCU1",
+    "SERVICE_DATA_REQUEST_TCU1",
+    "SERVICE_DATA_WRITE_TCU1",
+    "CHAR_NOTIFY_TCU1",
+    "CHAR_REQUEST_READ_TCU1",
+    "CHAR_REQUEST_WRITE_TCU1",
+    "CHAR_WRITE_TCU1",
     # Protocol — generation-aware helpers
-    "ProtocolGeneration",
+    "BLEProfile",
     "get_uuid",
     "get_char_notify",
     "get_char_request_read",
@@ -116,8 +150,9 @@ __all__ = [
     "get_field_def",
     "all_field_defs",
     "build_request",
+    "build_write_command",
     "is_specialized_advertisement",
-    "GEN1_POLL_FIELDS",
+    "TCU1_POLL_FIELDS",
     # Company IDs
     "NORDIC_COMPANY_ID",
     "APPLE_COMPANY_ID",
@@ -126,6 +161,7 @@ __all__ = [
     "BatteryState",
     "MotorState",
     "BikeSettings",
+    "SystemState",
     "TelemetrySnapshot",
     # Connection
     "SpecializedConnection",
@@ -134,6 +170,30 @@ __all__ = [
     # Telemetry
     "TelemetryMonitor",
     "run_telemetry_session",
+    # Framing
+    "compute_crc16_ccitt",
+    "pack_tcx",
+    "unpack_tcx",
+    "is_framed_packet",
+    # Parameters (TCX2+)
+    "BikeParameter",
+    "TCXFieldDefinition",
+    "get_tcx_field",
+    "all_tcx_fields",
+    "encode_parameter_id",
+    "decode_parameter_id",
+    "parse_tcx_message",
+    "build_tcx_request",
+    "build_tcx_write",
+    # Encryption
+    "encrypt_packet",
+    "decrypt_packet",
+    "derive_key",
+    "is_encryptable",
+    # Session
+    "ProtocolSession",
+    "TCU1Session",
+    "TCXSession",
 ]
 
-__version__ = "0.2.5"
+__version__ = "0.3.0"

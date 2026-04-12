@@ -5,8 +5,8 @@ UUIDs, message format, enums, and parsing. Ported from the
 Sepp62/LevoEsp32Ble C++ project (MIT).
 
 Supports two protocol generations:
-- Gen 2 ("TURBOHMI2017"): Vado/Levo/Creo 2019+, Nordic manufacturer ID
-- Gen 1 ("GIGATRONIK"): Levo 2018, Simplo manufacturer ID
+- TCX ("TURBOHMI2017"): Vado/Levo/Creo 2019+, Nordic manufacturer ID
+- TCU1 ("GIGATRONIK"): Levo 2018, Simplo manufacturer ID
 
 Both generations share the same message format and field definitions;
 only the BLE UUIDs and advertisement data differ.
@@ -16,57 +16,58 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
-from typing import Callable, NamedTuple
+from collections.abc import Callable
+from typing import NamedTuple
 
 # ---------------------------------------------------------------------------
 # Protocol generation
 # ---------------------------------------------------------------------------
 
 
-class ProtocolGeneration(StrEnum):
+class BLEProfile(StrEnum):
     """BLE protocol generation for Specialized Turbo bikes."""
 
-    GEN_1 = "gen1"  # 2018 Levo (Gigatronik TCU, Simplo mfr ID)
-    GEN_2 = "gen2"  # 2019+ Vado/Levo/Creo (TURBOHMI2017, Nordic mfr ID)
+    TCU1 = "tcu1"  # 2018 Levo (Gigatronik TCU, Simplo mfr ID)
+    TCX = "tcx"  # 2019+ Vado/Levo/Creo (TURBOHMI2017, Nordic mfr ID)
 
 
 # ---------------------------------------------------------------------------
 # UUID definitions
 # ---------------------------------------------------------------------------
 
-# Gen 2 base UUID: 000000xx-3731-3032-494d-484f42525554
+# TCX base UUID: 000000xx-3731-3032-494d-484f42525554
 # Last 12 bytes = "7102IMHOBRUT" = reverse of "TURBOHMI2017"
-GEN2_UUID_BASE = "0000{:04x}-3731-3032-494d-484f42525554"
+TCX_UUID_BASE = "0000{:04x}-3731-3032-494d-484f42525554"
 
-# Gen 1 base UUID: 000000xx-0000-4b49-4e4f-525441474947
+# TCU1 base UUID: 000000xx-0000-4b49-4e4f-525441474947
 # Last 10 bytes = "KINORTAGIG" = reverse of "GIGATRONIK"
-GEN1_UUID_BASE = "0000{:04x}-0000-4b49-4e4f-525441474947"
+TCU1_UUID_BASE = "0000{:04x}-0000-4b49-4e4f-525441474947"
 
-# Backward-compatible alias (Gen 2)
-UUID_BASE = GEN2_UUID_BASE
+# Backward-compatible alias (TCX)
+UUID_BASE = TCX_UUID_BASE
 
-_UUID_BASES: dict[ProtocolGeneration, str] = {
-    ProtocolGeneration.GEN_1: GEN1_UUID_BASE,
-    ProtocolGeneration.GEN_2: GEN2_UUID_BASE,
+_UUID_BASES: dict[BLEProfile, str] = {
+    BLEProfile.TCU1: TCU1_UUID_BASE,
+    BLEProfile.TCX: TCX_UUID_BASE,
 }
 
 
 def _uuid(short: int) -> str:
-    """Expand a short UUID into the full 128-bit Gen 2 UUID."""
-    return GEN2_UUID_BASE.format(short)
+    """Expand a short UUID into the full 128-bit TCX UUID."""
+    return TCX_UUID_BASE.format(short)
 
 
-def _uuid_gen1(short: int) -> str:
-    """Expand a short UUID into the full 128-bit Gen 1 UUID."""
-    return GEN1_UUID_BASE.format(short)
+def _uuid_tcu1(short: int) -> str:
+    """Expand a short UUID into the full 128-bit TCU1 UUID."""
+    return TCU1_UUID_BASE.format(short)
 
 
-def get_uuid(generation: ProtocolGeneration, short: int) -> str:
+def get_uuid(generation: BLEProfile, short: int) -> str:
     """Expand a short UUID for the given protocol generation."""
     return _UUID_BASES[generation].format(short)
 
 
-# ------ Gen 2 UUIDs (default, backward-compatible) ------
+# ------ TCX UUIDs (default, backward-compatible) ------
 
 # Service UUIDs
 SERVICE_DATA_NOTIFY = _uuid(0x0003)  # Notification data service
@@ -79,56 +80,56 @@ CHAR_REQUEST_WRITE = _uuid(0x0021)  # WRITE — send a 2-byte request here
 CHAR_REQUEST_READ = _uuid(0x0011)  # READ — read the response after writing to 0x0021
 CHAR_WRITE = _uuid(0x0012)  # WRITE — send commands (assist level, settings)
 
-# ------ Gen 1 UUIDs ------
+# ------ TCU1 UUIDs ------
 
-SERVICE_DATA_NOTIFY_GEN1 = _uuid_gen1(0x0003)
-SERVICE_DATA_REQUEST_GEN1 = _uuid_gen1(0x0001)
-SERVICE_DATA_WRITE_GEN1 = _uuid_gen1(0x0002)
+SERVICE_DATA_NOTIFY_TCU1 = _uuid_tcu1(0x0003)
+SERVICE_DATA_REQUEST_TCU1 = _uuid_tcu1(0x0001)
+SERVICE_DATA_WRITE_TCU1 = _uuid_tcu1(0x0002)
 
-CHAR_NOTIFY_GEN1 = _uuid_gen1(0x0013)
-CHAR_REQUEST_WRITE_GEN1 = _uuid_gen1(0x0021)
-CHAR_REQUEST_READ_GEN1 = _uuid_gen1(0x0011)
-CHAR_WRITE_GEN1 = _uuid_gen1(0x0012)
+CHAR_NOTIFY_TCU1 = _uuid_tcu1(0x0013)
+CHAR_REQUEST_WRITE_TCU1 = _uuid_tcu1(0x0021)
+CHAR_REQUEST_READ_TCU1 = _uuid_tcu1(0x0011)
+CHAR_WRITE_TCU1 = _uuid_tcu1(0x0012)
 
 # ------ Generation → UUID lookup ------
 
-_CHAR_NOTIFY_MAP: dict[ProtocolGeneration, str] = {
-    ProtocolGeneration.GEN_1: CHAR_NOTIFY_GEN1,
-    ProtocolGeneration.GEN_2: CHAR_NOTIFY,
+_CHAR_NOTIFY_MAP: dict[BLEProfile, str] = {
+    BLEProfile.TCU1: CHAR_NOTIFY_TCU1,
+    BLEProfile.TCX: CHAR_NOTIFY,
 }
 
-_CHAR_REQUEST_READ_MAP: dict[ProtocolGeneration, str] = {
-    ProtocolGeneration.GEN_1: CHAR_REQUEST_READ_GEN1,
-    ProtocolGeneration.GEN_2: CHAR_REQUEST_READ,
+_CHAR_REQUEST_READ_MAP: dict[BLEProfile, str] = {
+    BLEProfile.TCU1: CHAR_REQUEST_READ_TCU1,
+    BLEProfile.TCX: CHAR_REQUEST_READ,
 }
 
-_CHAR_REQUEST_WRITE_MAP: dict[ProtocolGeneration, str] = {
-    ProtocolGeneration.GEN_1: CHAR_REQUEST_WRITE_GEN1,
-    ProtocolGeneration.GEN_2: CHAR_REQUEST_WRITE,
+_CHAR_REQUEST_WRITE_MAP: dict[BLEProfile, str] = {
+    BLEProfile.TCU1: CHAR_REQUEST_WRITE_TCU1,
+    BLEProfile.TCX: CHAR_REQUEST_WRITE,
 }
 
-_CHAR_WRITE_MAP: dict[ProtocolGeneration, str] = {
-    ProtocolGeneration.GEN_1: CHAR_WRITE_GEN1,
-    ProtocolGeneration.GEN_2: CHAR_WRITE,
+_CHAR_WRITE_MAP: dict[BLEProfile, str] = {
+    BLEProfile.TCU1: CHAR_WRITE_TCU1,
+    BLEProfile.TCX: CHAR_WRITE,
 }
 
 
-def get_char_notify(generation: ProtocolGeneration) -> str:
+def get_char_notify(generation: BLEProfile) -> str:
     """Return the CHAR_NOTIFY UUID for the given protocol generation."""
     return _CHAR_NOTIFY_MAP[generation]
 
 
-def get_char_request_read(generation: ProtocolGeneration) -> str:
+def get_char_request_read(generation: BLEProfile) -> str:
     """Return the CHAR_REQUEST_READ UUID for the given protocol generation."""
     return _CHAR_REQUEST_READ_MAP[generation]
 
 
-def get_char_request_write(generation: ProtocolGeneration) -> str:
+def get_char_request_write(generation: BLEProfile) -> str:
     """Return the CHAR_REQUEST_WRITE UUID for the given protocol generation."""
     return _CHAR_REQUEST_WRITE_MAP[generation]
 
 
-def get_char_write(generation: ProtocolGeneration) -> str:
+def get_char_write(generation: BLEProfile) -> str:
     """Return the CHAR_WRITE UUID for the given protocol generation."""
     return _CHAR_WRITE_MAP[generation]
 
@@ -137,16 +138,16 @@ def get_char_write(generation: ProtocolGeneration) -> str:
 # BLE company IDs
 # ---------------------------------------------------------------------------
 
-# Nordic Semiconductor (Gen 2 bikes)
+# Nordic Semiconductor (TCX bikes)
 NORDIC_COMPANY_ID = 0x0059
 
-# Apple Inc. (some Gen 2 bikes advertise TURBOHMI in an iBeacon frame)
+# Apple Inc. (some TCX bikes advertise TURBOHMI in an iBeacon frame)
 APPLE_COMPANY_ID = 0x004C
 
-# Simplo Technology Co., LTD (Gen 1 bikes)
+# Simplo Technology Co., LTD (TCU1 bikes)
 SIMPLO_COMPANY_ID = 0x020D
 
-# Magic advertising string embedded in Gen 2 manufacturer data
+# Magic advertising string embedded in TCX manufacturer data
 ADVERTISING_MAGIC = b"TURBOHMI"
 
 # ---------------------------------------------------------------------------
@@ -229,6 +230,11 @@ def _int_from_bytes(data: bytes | bytearray, offset: int, size: int) -> int:
 _FIELD_DEFS: dict[tuple[int, int], FieldDefinition] = {}
 
 
+def _identity(v: int) -> int:
+    """Identity conversion (no-op)."""
+    return v
+
+
 @dataclass(frozen=True, slots=True)
 class FieldDefinition:
     """Metadata for a single protocol field."""
@@ -239,6 +245,8 @@ class FieldDefinition:
     unit: str
     data_size: int  # bytes of payload (after sender+channel)
     convert: Callable[[int], float | int]
+    writable: bool = False
+    encode: Callable[[float | int], int] | None = None
 
     @property
     def key(self) -> tuple[int, int]:
@@ -252,9 +260,12 @@ def _reg(
     unit: str,
     size: int,
     convert: Callable[[int], float | int] | None = None,
-) -> FieldDefinition:
+    *,
+    writable: bool = False,
+    encode: Callable[[float | int], int] | None = None,
+) -> None:
     if convert is None:
-        convert = lambda v: v  # noqa: E731  identity
+        convert = _identity
     fd = FieldDefinition(
         sender=sender,
         channel=channel,
@@ -262,9 +273,10 @@ def _reg(
         unit=unit,
         data_size=size,
         convert=convert,
+        writable=writable,
+        encode=encode,
     )
     _FIELD_DEFS[fd.key] = fd
-    return fd
 
 
 # --- Battery fields (sender 0x00 / 0x04) ---
@@ -289,19 +301,30 @@ _reg(
     "",
     2,
     lambda v: AssistLevel(v) if v in AssistLevel._value2member_map_ else v,
+    writable=True,
+    encode=lambda v: int(v),
 )
 _reg(0x01, 0x07, "motor_temp", "°C", 1)
 _reg(0x01, 0x0C, "motor_power", "W", 2)
 _reg(0x01, 0x10, "peak_assist", "", 3)  # 3 bytes: ECO%, TRAIL%, TURBO%
-_reg(0x01, 0x15, "shuttle", "", 1)
+_reg(0x01, 0x15, "shuttle", "", 1, writable=True, encode=lambda v: int(v))
 
 # --- Bike settings fields (sender 0x02) ---
-_reg(0x02, 0x00, "wheel_circumference", "mm", 2)
-_reg(0x02, 0x03, "assist_lev1_pct", "%", 1)
-_reg(0x02, 0x04, "assist_lev2_pct", "%", 1)
-_reg(0x02, 0x05, "assist_lev3_pct", "%", 1)
+_reg(0x02, 0x00, "wheel_circumference", "mm", 2, writable=True, encode=lambda v: int(v))
+_reg(0x02, 0x03, "assist_lev1_pct", "%", 1, writable=True, encode=lambda v: int(v))
+_reg(0x02, 0x04, "assist_lev2_pct", "%", 1, writable=True, encode=lambda v: int(v))
+_reg(0x02, 0x05, "assist_lev3_pct", "%", 1, writable=True, encode=lambda v: int(v))
 _reg(0x02, 0x06, "fake_channel", "", 1)
-_reg(0x02, 0x07, "acceleration", "%", 2, lambda v: (v - 3000) / 60.0)
+_reg(
+    0x02,
+    0x07,
+    "acceleration",
+    "%",
+    2,
+    lambda v: (v - 3000) / 60.0,
+    writable=True,
+    encode=lambda v: int(v * 60 + 3000),
+)
 
 # Duplicate battery fields for secondary battery (sender 0x04) — same channels
 for _ch in list(BatteryChannel):
@@ -345,19 +368,29 @@ class ParsedMessage(NamedTuple):
 
 def parse_message(data: bytes | bytearray) -> ParsedMessage:
     """
-    Parse raw bytes from CHAR_NOTIFY or CHAR_REQUEST_READ.
+    Parse raw bytes from CHAR_NOTIFY or CHAR_REQUEST_READ (TCU1 format).
 
     Format: [sender: 1B] [channel: 1B] [data: 1-4B little-endian]
 
+    TCX2+ bikes wrap responses in a 20-byte CRC-framed packet.  If a valid
+    CRC frame is detected, it is stripped automatically so TCU1-style
+    sender/channel parsing can proceed on the inner payload.
+
     Raises ValueError if data is shorter than 3 bytes.
     """
+    from .framing import is_framed_packet
+
+    # Detect 20-byte CRC-framed format used by TCX2+ bikes
+    if is_framed_packet(data):
+        data = data[:-2]  # strip 2-byte CRC trailer
+
     if len(data) < 3:
         raise ValueError(f"Message too short ({len(data)} bytes), need at least 3")
 
     sender = data[0]
     channel = data[1]
 
-    # Gen 1 bikes pad notifications to 20 bytes with 0xFF.  Strip trailing
+    # TCU1 bikes pad notifications to 20 bytes with 0xFF.  Strip trailing
     # padding so field extraction uses only the real data bytes.
     payload = data[2:]
     payload = payload.rstrip(b"\xff")
@@ -378,8 +411,8 @@ def parse_message(data: bytes | bytearray) -> ParsedMessage:
 
     if field_def is not None:
         # Use the smaller of defined size vs actual payload to avoid
-        # reading into padding on Gen 1 (e.g. peak_assist is 3 bytes on
-        # Gen 2 but only 1 byte per message on Gen 1).
+        # reading into padding on TCU1 (e.g. peak_assist is 3 bytes on
+        # TCX but only 1 byte per message on TCU1).
         actual_size = min(field_def.data_size, len(payload))
         raw = _int_from_bytes(payload, 0, actual_size)
         converted = field_def.convert(raw)
@@ -408,31 +441,31 @@ def is_specialized_advertisement(manufacturer_data: dict[int, bytes]) -> bool:
     """
     Check if BLE manufacturer data belongs to a Specialized Turbo bike.
 
-    Detects both Gen 2 (Nordic company ID + TURBOHMI magic) and
-    Gen 1 (Simplo Technology company ID) bikes.
+    Detects both TCX (Nordic company ID + TURBOHMI magic) and
+    TCU1 (Simplo Technology company ID) bikes.
     """
     return detect_generation(manufacturer_data) is not None
 
 
 def detect_generation(
     manufacturer_data: dict[int, bytes],
-) -> ProtocolGeneration | None:
+) -> BLEProfile | None:
     """
     Determine the protocol generation from BLE manufacturer advertisement data.
 
-    Returns ``ProtocolGeneration.GEN_2`` for Nordic/TURBOHMI advertisements,
-    ``ProtocolGeneration.GEN_1`` for Simplo Technology advertisements,
+    Returns ``BLEProfile.TCX`` for Nordic/TURBOHMI advertisements,
+    ``BLEProfile.TCU1`` for Simplo Technology advertisements,
     or ``None`` if the data does not match a known Specialized bike.
     """
-    # Gen 2: TURBOHMI magic in any manufacturer data payload.
+    # TCX: TURBOHMI magic in any manufacturer data payload.
     # Most bikes use Nordic (0x0059), but some (e.g. Vado 3.0) put it
     # in an Apple iBeacon frame (0x004C) instead.
     for payload in manufacturer_data.values():
         if ADVERTISING_MAGIC in payload:
-            return ProtocolGeneration.GEN_2
-    # Gen 1: Simplo Technology company ID
+            return BLEProfile.TCX
+    # TCU1: Simplo Technology company ID
     if SIMPLO_COMPANY_ID in manufacturer_data:
-        return ProtocolGeneration.GEN_1
+        return BLEProfile.TCU1
     return None
 
 
@@ -442,18 +475,112 @@ def detect_generation(
 
 
 def build_request(sender: int, channel: int) -> bytes:
-    """Build the 2-byte query payload for CHAR_REQUEST_WRITE."""
+    """Build the 2-byte query payload for CHAR_REQUEST_WRITE (TCU1 format)."""
     return bytes([sender, channel])
 
 
+def build_tcx_request(param_id: int) -> bytes:
+    """Build the 2-byte query payload for TCX2+ request-read."""
+    from .parameters import encode_parameter_id
+
+    return encode_parameter_id(param_id)
+
+
+def build_write_command(sender: int, channel: int, data: bytes | bytearray) -> bytes:
+    """
+    Build a TCU1 write command: ``[sender, channel, data...]``.
+
+    Written to CHAR_WRITE (``0x0012``).  Example::
+
+        build_write_command(0x01, 0x05, bytes([2]))  # set assist to TRAIL
+    """
+    return bytes([sender, channel]) + bytes(data)
+
+
+def build_tcx_write(param_id: int, data: bytes | bytearray) -> bytes:
+    """
+    Build a TCX2+ write command: ``[param_id_be, data...]``.
+
+    The result should be passed through ``session.pack()`` before writing
+    to CHAR_WRITE.  Example::
+
+        build_tcx_write(143, bytes([2]))  # set travel mode
+    """
+    from .parameters import encode_parameter_id
+
+    return encode_parameter_id(param_id) + bytes(data)
+
+
 # ---------------------------------------------------------------------------
-# Gen 1 polling
+# TCX message parsing
 # ---------------------------------------------------------------------------
 
-# Fields to poll via request-read on Gen 1 bikes. Gen 1 pushes very few
+
+def parse_tcx_message(data: bytes | bytearray) -> ParsedMessage:
+    """
+    Parse a TCX2/TCX3/TCX4 message (after CRC/encryption stripping).
+
+    Format: [param_id_hi: 1B] [param_id_lo: 1B] [data: 0-16B little-endian]
+
+    The parameter ID is a 16-bit big-endian value that maps to a
+    :class:`~parameters.BikeParameter`.
+    """
+    from .parameters import decode_parameter_id, get_tcx_field
+
+    if len(data) < 2:
+        raise ValueError(f"TCX message too short ({len(data)} bytes), need at least 2")
+
+    param_id = decode_parameter_id(data)
+    payload = data[2:]
+
+    # Strip trailing zero-padding (TCX pads to 18 bytes total)
+    payload = payload.rstrip(b"\x00")
+
+    field_def = get_tcx_field(param_id)
+
+    if len(payload) == 0:
+        return ParsedMessage(
+            sender=param_id >> 8,
+            channel=param_id & 0xFF,
+            raw_value=0,
+            converted_value=None,
+            field_name=field_def.name if field_def else None,
+            unit=field_def.unit if field_def else "",
+        )
+
+    if field_def is not None:
+        actual_size = min(field_def.data_size, len(payload))
+        raw = _int_from_bytes(payload, 0, actual_size)
+        converted = field_def.convert(raw)
+        return ParsedMessage(
+            sender=param_id >> 8,
+            channel=param_id & 0xFF,
+            raw_value=raw,
+            converted_value=converted,
+            field_name=field_def.name,
+            unit=field_def.unit,
+        )
+
+    # Unknown parameter — extract as many bytes as available
+    raw = _int_from_bytes(payload, 0, len(payload))
+    return ParsedMessage(
+        sender=param_id >> 8,
+        channel=param_id & 0xFF,
+        raw_value=raw,
+        converted_value=raw,
+        field_name=None,
+        unit="",
+    )
+
+
+# ---------------------------------------------------------------------------
+# TCU1 polling
+# ---------------------------------------------------------------------------
+
+# Fields to poll via request-read on TCU1 bikes. TCU1 pushes very few
 # fields passively (peak_assist cycles constantly, temps and voltage arrive
 # infrequently). Poll everything we care about.
-GEN1_POLL_FIELDS: tuple[tuple[int, int], ...] = (
+TCU1_POLL_FIELDS: tuple[tuple[int, int], ...] = (
     # Battery
     (Sender.BATTERY, BatteryChannel.SIZE_WH),
     (Sender.BATTERY, BatteryChannel.REMAIN_WH),
