@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
 
 from bleak import BleakClient
 
@@ -27,7 +26,7 @@ from .protocol import (
     parse_tcx_message,
     ParsedMessage,
 )
-from .session import ProtocolSession, TCU1Session, TCXSession
+from .session import ProtocolSession, TCXSession
 
 logger = logging.getLogger(__name__)
 
@@ -124,9 +123,7 @@ async def poll_tcx(
             snapshot.update_from_message(msg)
             updated = True
         except Exception:  # noqa: BLE001
-            logger.debug(
-                "Failed to poll TCX param %d", int(param), exc_info=True
-            )
+            logger.debug("Failed to poll TCX param %d", int(param), exc_info=True)
     return updated
 
 
