@@ -111,6 +111,13 @@ from .protocol import (
     build_tcx_request as build_tcx_request,
     build_tcx_write as build_tcx_write,
 )
+from .coordinator_helpers import (
+    TCX_POLL_PARAMS as TCX_POLL_PARAMS,
+    parse_notification as parse_notification,
+    poll_tcu1 as poll_tcu1,
+    poll_tcx as poll_tcx,
+    identify_tcx as identify_tcx,
+)
 
 __all__ = [
     # Protocol — TCX UUIDs (backward-compatible defaults)
@@ -194,6 +201,12 @@ __all__ = [
     "ProtocolSession",
     "TCU1Session",
     "TCXSession",
+    # Coordinator helpers
+    "TCX_POLL_PARAMS",
+    "parse_notification",
+    "poll_tcu1",
+    "poll_tcx",
+    "identify_tcx",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
