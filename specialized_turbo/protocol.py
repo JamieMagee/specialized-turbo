@@ -79,6 +79,12 @@ CHAR_NOTIFY = _uuid(0x0013)  # READ, NOTIFY — bike pushes telemetry here
 CHAR_REQUEST_WRITE = _uuid(0x0021)  # WRITE — send a 2-byte request here
 CHAR_REQUEST_READ = _uuid(0x0011)  # READ — read the response after writing to 0x0021
 CHAR_WRITE = _uuid(0x0012)  # WRITE — send commands (assist level, settings)
+CHAR_WRITE_NO_RESP_S2 = _uuid(
+    0x0022
+)  # WRITE_NO_RESP — DFU / ride log writes (service 2)
+CHAR_WRITE_NO_RESP_S3 = _uuid(
+    0x0023
+)  # WRITE_NO_RESP — DFU / ride log writes (service 3)
 
 # ------ TCU1 UUIDs ------
 
@@ -90,6 +96,8 @@ CHAR_NOTIFY_TCU1 = _uuid_tcu1(0x0013)
 CHAR_REQUEST_WRITE_TCU1 = _uuid_tcu1(0x0021)
 CHAR_REQUEST_READ_TCU1 = _uuid_tcu1(0x0011)
 CHAR_WRITE_TCU1 = _uuid_tcu1(0x0012)
+CHAR_WRITE_NO_RESP_S2_TCU1 = _uuid_tcu1(0x0022)
+CHAR_WRITE_NO_RESP_S3_TCU1 = _uuid_tcu1(0x0023)
 
 # ------ Generation → UUID lookup ------
 
@@ -149,6 +157,9 @@ SIMPLO_COMPANY_ID = 0x020D
 
 # Magic advertising string embedded in TCX manufacturer data
 ADVERTISING_MAGIC = b"TURBOHMI"
+
+# Standard Bluetooth Cycling Speed and Cadence service (TCU1 bikes may advertise)
+CYCLING_SPEED_CADENCE_SERVICE = "00001816-0000-1000-8000-00805f9b34fb"
 
 # ---------------------------------------------------------------------------
 # Protocol enums
@@ -522,10 +533,20 @@ def parse_tcx_message(data: bytes | bytearray) -> ParsedMessage:
 
     Format: [param_id_hi: 1B] [param_id_lo: 1B] [data: 0-16B little-endian]
 
+    Some bikes wrap responses in an ``f8 ff`` system-response envelope.
+    The prefix is stripped automatically before extracting the parameter ID.
+
     The parameter ID is a 16-bit big-endian value that maps to a
     :class:`~parameters.BikeParameter`.
     """
+    from .framing import strip_clear_prefix
     from .parameters import decode_parameter_id, get_tcx_field
+
+    if len(data) < 2:
+        raise ValueError(f"TCX message too short ({len(data)} bytes), need at least 2")
+
+    # Strip f8ff system-response envelope if present
+    data = strip_clear_prefix(data)
 
     if len(data) < 2:
         raise ValueError(f"TCX message too short ({len(data)} bytes), need at least 2")

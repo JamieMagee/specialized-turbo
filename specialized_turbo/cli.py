@@ -15,6 +15,7 @@ import logging
 import sys
 
 from .connection import scan_for_bikes, SpecializedConnection
+from .parameters import all_tcx_fields
 from .protocol import (
     all_field_defs,
 )
@@ -96,6 +97,11 @@ _FIELD_NAME_MAP: dict[str, tuple[int, int]] = {}
 for _key, _fd in all_field_defs().items():
     _FIELD_NAME_MAP[_fd.name] = _key
 
+# Map human-readable names → TCX parameter ID
+_TCX_FIELD_NAME_MAP: dict[str, int] = {}
+for _param_id, _tfd in all_tcx_fields().items():
+    _TCX_FIELD_NAME_MAP[_tfd.name] = _param_id
+
 
 async def _cmd_read(args: argparse.Namespace) -> None:
     """Connect, read a specific value, and disconnect."""
@@ -103,23 +109,36 @@ async def _cmd_read(args: argparse.Namespace) -> None:
 
     if field_name == "list":
         print("Available fields:\n")
+        print("  TCU1 fields:")
         for name, (sender, channel) in sorted(_FIELD_NAME_MAP.items()):
             fd = all_field_defs()[(sender, channel)]
             print(
-                f"  {name:<28s}  (sender=0x{sender:02x} channel=0x{channel:02x})  [{fd.unit}]"
+                f"    {name:<28s}  (sender=0x{sender:02x} channel=0x{channel:02x})  [{fd.unit}]"
             )
+        print("\n  TCX fields:")
+        for name, param_id in sorted(_TCX_FIELD_NAME_MAP.items()):
+            tfd = all_tcx_fields()[param_id]
+            print(f"    {name:<28s}  (param={param_id})  [{tfd.unit}]")
         return
 
-    if field_name not in _FIELD_NAME_MAP:
+    # Prefer TCX field lookup, fall back to TCU1
+    tcx_param_id = _TCX_FIELD_NAME_MAP.get(field_name)
+    tcu1_key = _FIELD_NAME_MAP.get(field_name)
+
+    if tcx_param_id is None and tcu1_key is None:
         print(f"Unknown field: {field_name}")
         print("Use 'read list' to see available fields.")
         sys.exit(1)
 
-    sender, channel = _FIELD_NAME_MAP[field_name]
     print(f"Connecting to {args.address} to read '{field_name}' ...")
 
     async with SpecializedConnection(args.address, pin=args.pin) as conn:
-        msg = await conn.request_value(sender, channel)
+        if tcx_param_id is not None:
+            msg = await conn.request_tcx_value(tcx_param_id)
+        else:
+            assert tcu1_key is not None
+            sender, channel = tcu1_key
+            msg = await conn.request_value(sender, channel)
         if args.format == "json":
             print(
                 json.dumps(

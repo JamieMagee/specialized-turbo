@@ -15,7 +15,7 @@ import logging
 from bleak import BleakClient
 
 from .encryption import derive_key
-from .framing import is_framed_packet, unpack_tcx
+from .framing import is_framed_packet, strip_clear_prefix, unpack_tcx
 from .models import TelemetrySnapshot
 from .parameters import BikeParameter
 from .protocol import (
@@ -114,8 +114,7 @@ async def poll_tcx(
     for param in TCX_POLL_PARAMS:
         try:
             request = build_tcx_request(int(param))
-            packed = session.pack(request)
-            await client.write_gatt_char(char_request_write, packed)
+            await client.write_gatt_char(char_request_write, request)
             await asyncio.sleep(0.1)
             response = await client.read_gatt_char(char_request_read)
             unpacked = session.unpack(response)
@@ -169,11 +168,22 @@ async def identify_tcx(
     payload = key_response
     if is_framed_packet(payload):
         payload = unpack_tcx(payload)
+    payload = strip_clear_prefix(payload)
     key_data = payload[2:].rstrip(b"\x00")
 
     if len(key_data) == 0:
         logger.debug(
             "Encryption key response was empty — bike may not require encryption"
+        )
+        return TCXSession()
+
+    # A valid base64 encryption key is 64 chars (~48 decoded bytes).
+    # Short responses (e.g. a single firmware-version byte) are not keys.
+    if len(key_data) < 20:
+        logger.debug(
+            "Key response too short for encryption (%d bytes) "
+            "— bike does not require encryption",
+            len(key_data),
         )
         return TCXSession()
 

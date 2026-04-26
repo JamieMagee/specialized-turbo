@@ -341,7 +341,7 @@ class SpecializedConnection:
         key is found, or an unencrypted one otherwise.
         """
         from .encryption import derive_key
-        from .framing import is_framed_packet, unpack_tcx
+        from .framing import is_framed_packet, strip_clear_prefix, unpack_tcx
         from .parameters import BikeParameter
 
         assert self._client is not None
@@ -374,14 +374,26 @@ class SpecializedConnection:
             logger.debug("No encryption key in identification response")
             return TCXSession()
 
-        # Strip CRC framing if present, then skip 2-byte param ID
+        # Strip CRC framing if present, then strip f8ff envelope, then
+        # skip 2-byte param ID to get the key material.
         payload = key_response
         if is_framed_packet(payload):
             payload = unpack_tcx(payload)
+        payload = strip_clear_prefix(payload)
         key_data = payload[2:].rstrip(b"\x00")
 
         if len(key_data) == 0:
             logger.debug("Empty key response — bike does not require encryption")
+            return TCXSession()
+
+        # A valid base64 encryption key is 64 chars (~48 decoded bytes).
+        # Short responses (e.g. a single firmware-version byte) are not keys.
+        if len(key_data) < 20:
+            logger.debug(
+                "Key response too short for encryption (%d bytes) "
+                "— bike does not require encryption",
+                len(key_data),
+            )
             return TCXSession()
 
         try:

@@ -360,3 +360,27 @@ class TestTCXFieldNameRouting:
         assert msg.converted_value == 52
         snap.update_from_message(msg)
         assert snap.battery.charge_pct == 52
+
+    def test_parse_tcx_message_with_f8ff_prefix(self):
+        """Vado 3.0 wraps responses in f8ff envelope — should be stripped."""
+        from specialized_turbo.protocol import parse_tcx_message
+
+        # Actual Vado 3.0 SYSTEM_STATE response (after CRC strip):
+        # f8ff 016b 05 00... → param 363, data = 5
+        payload = bytes.fromhex("f8ff016b050000000000000000000000")
+        msg = parse_tcx_message(payload)
+        assert msg.field_name == "system_state"
+        assert msg.converted_value == 5
+
+    def test_parse_tcx_f8ff_battery_charge(self):
+        """Vado 3.0 battery charge response with f8ff envelope."""
+        from specialized_turbo.protocol import parse_tcx_message
+
+        snap = TelemetrySnapshot()
+        # f8ff 001a 34 00... → param 26 (BATTERY1_STATE_OF_CHARGE), data = 0x34 (52%)
+        payload = bytes.fromhex("f8ff001a340000000000000000000000")
+        msg = parse_tcx_message(payload)
+        assert msg.field_name == "battery_charge_percent"
+        assert msg.converted_value == 52
+        snap.update_from_message(msg)
+        assert snap.battery.charge_pct == 52

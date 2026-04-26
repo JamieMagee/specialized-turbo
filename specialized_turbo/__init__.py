@@ -86,6 +86,7 @@ from .framing import (
     pack_tcx as pack_tcx,
     unpack_tcx as unpack_tcx,
     is_framed_packet as is_framed_packet,
+    strip_clear_prefix as strip_clear_prefix,
 )
 from .parameters import (
     BikeParameter as BikeParameter,
@@ -209,4 +210,4 @@ __all__ = [
     "identify_tcx",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"

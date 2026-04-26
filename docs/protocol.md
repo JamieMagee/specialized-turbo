@@ -85,11 +85,13 @@ The trailing bytes decode to `GIGATRONIK` reversed (`KINORTAGIG`).
 | --- | --- | --- |
 | Notification data (service) | `0x0003` | |
 | Telemetry notifications | `0x0013` | READ, NOTIFY |
+| DFU / ride log writes | `0x0023` | WRITE_WITHOUT_RESPONSE |
 | Request/query (service) | `0x0001` | |
 | Write request query | `0x0021` | WRITE |
 | Read query response | `0x0011` | READ |
 | Write/commands (service) | `0x0002` | |
 | Send commands | `0x0012` | WRITE |
+| DFU / ride log writes | `0x0022` | WRITE_WITHOUT_RESPONSE |
 
 Expand short IDs with the appropriate UUID base. For example, characteristic `0x0013` on a TCX2 bike is `00000013-3731-3032-494d-484f42525554`.
 
@@ -315,14 +317,23 @@ Before streaming telemetry, TCX2+ bikes require a multi-step identification sequ
 
 The identification result determines the bike type, which maps to a protocol generation:
 
-| Bike type | Generation |
-| --- | --- |
-| 3 or 4 | TCX2 |
-| 5 or 6 | TCX3 |
-| 7 or 8 | TCX4 |
-| 1 or 2 | TCU1 (legacy) |
+| Bike type | Name | Protocol generation |
+| --- | --- | --- |
+| 0 | PROTOTYPE | TCU1 (legacy) |
+| 1 | TURBO | TCU1 (legacy) |
+| 2 | LEVO1 | TCU1 (legacy) |
+| 3 | VADO | TCU1 (legacy) |
+| 4 | PLW | TCU1 (legacy) |
+| 5 | LEVO2 | TCX (2019+) |
+| 6 | COMO2 | TCX (2019+) |
+| 7 | PLW2 | TCX (2019+) |
+| 8 | APLW2 | TCX (2019+) |
+| 9 | PLUTO | TCX (2019+) |
+| 10 | APLUTO | TCX (2019+) |
+| 11 | APLUTOPLUS | TCX (2019+) |
+| 12 | PLUTO2 | TCX (2019+) |
 
-Each generation has a range of protocol sub-versions that determine which parameters are available. TCX2 supports versions `0x12` through `0x34`+, TCX3 supports `0x06` through `0x24`+, and TCX4 has its own range.
+At the transport layer, the app distinguishes only two protocol modes: TCU1 (types 0–4, legacy sender/channel format) and TCX (types 5–12, parameter ID format with CRC framing). The TCX2/TCX3/TCX4 distinction refers to which parameter IDs the bike supports, not the wire format — all TCX bikes use the same 20-byte CRC-framed packets.
 
 ---
 

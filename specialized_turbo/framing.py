@@ -20,6 +20,11 @@ _CRC_INIT = 0xFFFF
 # NAK byte — never encrypted, may appear as a bare single-byte packet
 NAK_BYTE = 0x0A
 
+# System response prefix — some bikes wrap request-read responses in
+# an ``f8 ff`` envelope: ``[f8ff][param_id_be][data…][zero-pad][CRC]``.
+# The prefix must be stripped before extracting the parameter ID.
+CLEAR_PREFIX = b"\xf8\xff"
+
 
 def compute_crc16_ccitt(data: bytes | bytearray) -> int:
     """Compute CRC-16/CCITT-FALSE over *data*. Returns a 16-bit integer."""
@@ -76,3 +81,17 @@ def is_framed_packet(data: bytes | bytearray) -> bool:
     payload = data[:FRAMED_PAYLOAD_SIZE]
     received_crc = int.from_bytes(data[FRAMED_PAYLOAD_SIZE:], "little")
     return received_crc == compute_crc16_ccitt(payload)
+
+
+def strip_clear_prefix(data: bytes | bytearray) -> bytes:
+    """Strip the ``f8 ff`` system-response envelope if present.
+
+    Some bikes (e.g. Vado 3.0 / TCX3) wrap every request-read response in
+    a 2-byte ``\\xf8\\xff`` prefix before the parameter ID.  This function
+    strips that prefix so the remaining bytes start with the param ID.
+
+    Returns the data unchanged if the prefix is not present.
+    """
+    if len(data) >= 4 and data[:2] == CLEAR_PREFIX:
+        return bytes(data[2:])
+    return bytes(data)

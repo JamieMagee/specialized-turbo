@@ -12,6 +12,7 @@ from specialized_turbo.framing import (
     compute_crc16_ccitt,
     is_framed_packet,
     pack_tcx,
+    strip_clear_prefix,
     unpack_tcx,
 )
 
@@ -111,3 +112,41 @@ class TestIsFramedPacket:
         """TCU1 FF-padded 20-byte message should NOT match as framed."""
         data = bytes.fromhex("000c34" + "ff" * 17)
         assert is_framed_packet(data) is False
+
+
+class TestStripClearPrefix:
+    def test_strips_f8ff_prefix(self):
+        """Vado 3.0 battery charge response — f8ff envelope stripped."""
+        # After CRC stripping: f8ff 000c 05 000...
+        payload = bytes.fromhex("f8ff000c050000000000000000000000")
+        result = strip_clear_prefix(payload)
+        assert result == bytes.fromhex("000c050000000000000000000000")
+
+    def test_no_prefix_unchanged(self):
+        """Normal TCX payload without f8ff prefix — returned unchanged."""
+        payload = bytes.fromhex("001a340000000000000000000000000000")
+        result = strip_clear_prefix(payload)
+        assert result == payload
+
+    def test_too_short_unchanged(self):
+        """Data shorter than 4 bytes is never stripped."""
+        assert strip_clear_prefix(b"\xf8\xff\x00") == b"\xf8\xff\x00"
+        assert strip_clear_prefix(b"\xf8\xff") == b"\xf8\xff"
+        assert strip_clear_prefix(b"") == b""
+
+    def test_vado30_system_state_response(self):
+        """Actual Vado 3.0 SYSTEM_STATE response after CRC strip."""
+        # f8ff 016b 05 00...  → param 363 (SYSTEM_STATE), data = 05
+        payload = bytes.fromhex("f8ff016b050000000000000000000000")
+        result = strip_clear_prefix(payload)
+        # After stripping: param_id=016b, data=05
+        assert result[:2] == b"\x01\x6b"
+        assert result[2] == 0x05
+
+    def test_vado30_battery_firmware_response(self):
+        """Actual Vado 3.0 BATTERY1_FIRMWARE response (no encryption key)."""
+        # f8ff 000e 05 00...  → param 14, data = 05
+        payload = bytes.fromhex("f8ff000e050000000000000000000000")
+        result = strip_clear_prefix(payload)
+        assert result[:2] == b"\x00\x0e"
+        assert result[2] == 0x05

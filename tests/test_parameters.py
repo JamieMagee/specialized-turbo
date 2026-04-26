@@ -28,8 +28,8 @@ class TestBikeParameterEnum:
         assert BikeParameter.SYSTEM_GET_NEW_VI == 300
 
     def test_total_members(self):
-        """Regression guard: 352 parameters + SYSTEM_GET_NEW_VI = 353 total."""
-        assert len(BikeParameter) == 353
+        """Regression guard: 353 parameters + SYSTEM_GET_NEW_VI = 354 total."""
+        assert len(BikeParameter) == 354
 
 
 class TestEncodeDecodeParameterId:
