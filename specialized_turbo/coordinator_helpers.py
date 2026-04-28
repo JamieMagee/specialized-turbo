@@ -133,16 +133,21 @@ async def identify_tcx(
 ) -> TCXSession:
     """Run the TCX identification handshake and return a session.
 
-    Executes a 3-step request-read sequence.  Step 3 may return
-    encryption key material.  Returns an encrypted :class:`TCXSession`
-    if a key is found, or an unencrypted one otherwise.
+    Executes the full 7-step identification sequence.  Step 4 may
+    return encryption key material.  Returns an encrypted
+    :class:`TCXSession` if a key is found, or an unencrypted one
+    otherwise.
 
     If the handshake fails, returns an unencrypted session.
     """
     steps = [
         BikeParameter.SYSTEM_GET_NEW_VI,
+        BikeParameter.SYSTEM_HMI_PROTOCOL_VERSION,
         BikeParameter.SYSTEM_STATE,
         BikeParameter.BATTERY1_FIRMWARE,
+        BikeParameter.SYSTEM_HMI_HW_VERSION,
+        BikeParameter.SYSTEM_MOTOR_TYPE,
+        BikeParameter.SYSTEM_EBIKE_SERIAL_NUMBER,
     ]
 
     key_response: bytes | None = None

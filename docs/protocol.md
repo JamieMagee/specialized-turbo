@@ -300,10 +300,10 @@ Before streaming telemetry, TCX2+ bikes require a multi-step identification sequ
 | Step | Param ID | Name | Purpose |
 | --- | --- | --- | --- |
 | 1 | 300 | `SYSTEM_GET_NEW_VI` | Trigger identification from scan data |
-| 2 | 310 | `SYSTEM_HMI_HW_VERSION` | HMI hardware version |
+| 2 | 310 | `SYSTEM_HMI_PROTOCOL_VERSION` | Protocol version negotiation |
 | 3 | 363 | `SYSTEM_STATE` | System state (ready, sleeping, etc.) |
 | 4 | 14 | `BATTERY1_FIRMWARE` | Encryption key exchange |
-| 5 | 308 | `SYSTEM_HMI_HW_VERSION` | Protocol version |
+| 5 | 308 | `SYSTEM_HMI_HW_VERSION` | HMI hardware version |
 | 6 | 329 | `SYSTEM_MOTOR_TYPE` | Motor type |
 | 7 | 290 | `SYSTEM_EBIKE_SERIAL_NUMBER` | Serial / battery info |
 

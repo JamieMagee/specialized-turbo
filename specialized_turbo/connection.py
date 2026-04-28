@@ -336,9 +336,9 @@ class SpecializedConnection:
     async def _identify_tcx(self) -> TCXSession:
         """Run the TCX identification handshake and return an appropriate session.
 
-        Executes a short 3-step request-read sequence.  Step 3 may return
-        encryption key material.  Returns an encrypted ``TCXSession`` if a
-        key is found, or an unencrypted one otherwise.
+        Executes the full 7-step identification sequence.  Step 4 may
+        return encryption key material.  Returns an encrypted
+        ``TCXSession`` if a key is found, or an unencrypted one otherwise.
         """
         from .encryption import derive_key
         from .framing import is_framed_packet, strip_clear_prefix, unpack_tcx
@@ -350,8 +350,12 @@ class SpecializedConnection:
 
         steps = [
             BikeParameter.SYSTEM_GET_NEW_VI,  # 300
+            BikeParameter.SYSTEM_HMI_PROTOCOL_VERSION,  # 310
             BikeParameter.SYSTEM_STATE,  # 363
             BikeParameter.BATTERY1_FIRMWARE,  # 14 — encryption key
+            BikeParameter.SYSTEM_HMI_HW_VERSION,  # 308
+            BikeParameter.SYSTEM_MOTOR_TYPE,  # 329
+            BikeParameter.SYSTEM_EBIKE_SERIAL_NUMBER,  # 290
         ]
 
         key_response: bytes | None = None
