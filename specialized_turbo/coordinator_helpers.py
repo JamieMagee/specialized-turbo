@@ -15,7 +15,12 @@ import logging
 from bleak import BleakClient
 
 from .encryption import derive_key
-from .framing import is_framed_packet, strip_clear_prefix, unpack_tcx
+from .framing import (
+    is_framed_packet,
+    is_nak_packet,
+    parse_nak_packet,
+    unpack_tcx,
+)
 from .models import TelemetrySnapshot
 from .parameters import BikeParameter
 from .protocol import (
@@ -158,8 +163,27 @@ async def identify_tcx(
             await client.write_gatt_char(char_request_write, request)
             await asyncio.sleep(0.15)
             response = await client.read_gatt_char(char_request_read)
+            inner = bytes(response)
+            if is_framed_packet(inner):
+                try:
+                    inner = unpack_tcx(inner)
+                except ValueError:
+                    pass
+
+            if is_nak_packet(inner):
+                echoed, reason = parse_nak_packet(inner)
+                logger.warning(
+                    "Identification step %d (%s) rejected by bike: "
+                    "echoed_param=%d reason=0x%02x",
+                    int(param),
+                    param.name,
+                    echoed,
+                    reason,
+                )
+                continue
+
             if param == BikeParameter.BATTERY1_FIRMWARE:
-                key_response = bytes(response)
+                key_response = inner
     except Exception:  # noqa: BLE001
         logger.warning(
             "TCX identification handshake failed, using unencrypted session",
@@ -170,11 +194,9 @@ async def identify_tcx(
     if key_response is None or len(key_response) < 4:
         return TCXSession()
 
-    payload = key_response
-    if is_framed_packet(payload):
-        payload = unpack_tcx(payload)
-    payload = strip_clear_prefix(payload)
-    key_data = payload[2:].rstrip(b"\x00")
+    # key_response is the inner payload with CRC and any NAK already
+    # filtered above.  Skip the 2-byte param ID to reach key material.
+    key_data = key_response[2:].rstrip(b"\x00")
 
     if len(key_data) == 0:
         logger.debug(

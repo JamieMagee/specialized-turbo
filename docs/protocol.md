@@ -235,13 +235,15 @@ All TCX2+ packets carry a CRC-16 for integrity checking.
 The packet `f8ff000c0500000000000000000000000000e6ca` breaks down as:
 
 ```
-Payload (18 bytes): f8 ff 00 0c 05 00 00 00 00 00 00 00 00 00 00 00 00 00
-CRC-16 (LE):        e6 ca  (0xCAE6)
+NAK marker:  f8 ff
+Echoed ID:   00 0c   (parameter 12, requested by the host)
+Reason code: 05
+Zero-pad:    00 * 13
+CRC-16 (LE): e6 ca   (0xCAE6)
 ```
 
+This is a **NAK** (rejection) from the bike — see the next section.
 Verifying: `crc_hqx(bytes.fromhex("f8ff000c0500000000000000000000000000"), 0xFFFF)` gives `0xCAE6`.
-
-In that packet, the first two payload bytes (`F8 FF`) happen to look like a magic header, but they're actually a parameter ID. The correct detection method is CRC validation, not byte-matching.
 
 ---
 
@@ -261,8 +263,23 @@ The first two bytes (the parameter ID) are always in the clear. Bytes 2-19 are A
 
 Even when encryption is active, these packets are always sent in the clear:
 
-- **NAK**: a single `0x0A` byte (negative acknowledgment)
-- **F8 FF prefix**: packets whose parameter ID is `0xF8FF` (identification / system messages)
+- **Legacy NAK**: a single `0x0A` byte (older TCU1/TCX1 negative acknowledgment)
+- **TCX2+ NAK envelope**: any packet starting with `0xF8 0xFF` — the bike's rejection format
+
+### TCX2+ NAK rejections
+
+When the bike rejects a request (wrong PIN, encryption required, parameter
+unsupported, parameter currently unavailable, …) it responds with a 20-byte
+NAK packet:
+
+```
+f8 ff [echoed_param_id_be: 2B] [reason_code: 1B] [zeros: 13B] [crc16_le: 2B]
+```
+
+The 2-byte parameter ID is the request that was rejected, echoed back. The
+1-byte reason code indicates why. The library detects NAK packets via
+`framing.is_nak_packet()` and surfaces them through `ParsedMessage.nak_reason`
+rather than parsing the reason byte as if it were valid data.
 
 ### Key derivation
 

@@ -86,7 +86,10 @@ from .framing import (
     pack_tcx as pack_tcx,
     unpack_tcx as unpack_tcx,
     is_framed_packet as is_framed_packet,
+    is_nak_packet as is_nak_packet,
+    parse_nak_packet as parse_nak_packet,
     strip_clear_prefix as strip_clear_prefix,
+    NAK_PREFIX as NAK_PREFIX,
 )
 from .parameters import (
     BikeParameter as BikeParameter,
@@ -183,6 +186,10 @@ __all__ = [
     "pack_tcx",
     "unpack_tcx",
     "is_framed_packet",
+    "is_nak_packet",
+    "parse_nak_packet",
+    "strip_clear_prefix",
+    "NAK_PREFIX",
     # Parameters (TCX2+)
     "BikeParameter",
     "TCXFieldDefinition",
@@ -210,4 +217,4 @@ __all__ = [
     "identify_tcx",
 ]
 
-__version__ = "0.4.2"
+__version__ = "0.5.0"

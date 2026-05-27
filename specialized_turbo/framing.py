@@ -20,10 +20,20 @@ _CRC_INIT = 0xFFFF
 # NAK byte — never encrypted, may appear as a bare single-byte packet
 NAK_BYTE = 0x0A
 
-# System response prefix — some bikes wrap request-read responses in
-# an ``f8 ff`` envelope: ``[f8ff][param_id_be][data…][zero-pad][CRC]``.
-# The prefix must be stripped before extracting the parameter ID.
-CLEAR_PREFIX = b"\xf8\xff"
+# TCX2+ NAK marker.  Packets starting with ``f8 ff`` are rejection responses
+# from the bike, not a wrapper around valid data.  Format after CRC strip:
+#
+#     f8 ff [echoed_param_id_be: 2B] [reason_code: 1B] [zeros: 13B]
+#
+# The native app calls this ``isNakPacket`` (see ProtocolSessionTCX2 in
+# libturbo-core.so).  Earlier versions of this library treated ``f8 ff`` as a
+# "system response envelope" and parsed the reason byte as data — that was
+# wrong and produced bogus telemetry (e.g. SoC=5%, capacity=4Wh).
+NAK_PREFIX = b"\xf8\xff"
+
+# Backwards-compatible alias.  Older code referred to NAK_PREFIX as a
+# "clear-prefix" envelope.  Keep the name so existing imports don't break.
+CLEAR_PREFIX = NAK_PREFIX
 
 
 def compute_crc16_ccitt(data: bytes | bytearray) -> int:
@@ -84,14 +94,39 @@ def is_framed_packet(data: bytes | bytearray) -> bool:
 
 
 def strip_clear_prefix(data: bytes | bytearray) -> bytes:
-    """Strip the ``f8 ff`` system-response envelope if present.
+    """Strip the ``f8 ff`` prefix if present.
 
-    Some bikes (e.g. Vado 3.0 / TCX3) wrap every request-read response in
-    a 2-byte ``\\xf8\\xff`` prefix before the parameter ID.  This function
-    strips that prefix so the remaining bytes start with the param ID.
+    .. deprecated:: 0.5.0
+       The ``f8 ff`` prefix marks a NAK (rejection) packet, not a wrapper
+       around valid data.  Use :func:`is_nak_packet` instead.  This helper
+       is retained for backwards compatibility but should not be used in
+       new code on the parse path.
 
     Returns the data unchanged if the prefix is not present.
     """
-    if len(data) >= 4 and data[:2] == CLEAR_PREFIX:
+    if len(data) >= 4 and data[:2] == NAK_PREFIX:
         return bytes(data[2:])
     return bytes(data)
+
+
+def is_nak_packet(data: bytes | bytearray) -> bool:
+    """Return True if *data* is a TCX2+ NAK rejection packet.
+
+    NAK packets start with ``f8 ff`` and carry the echoed parameter ID plus
+    a one-byte reason code.  See :data:`NAK_PREFIX`.
+    """
+    return len(data) >= 5 and data[0] == 0xF8 and data[1] == 0xFF
+
+
+def parse_nak_packet(data: bytes | bytearray) -> tuple[int, int]:
+    """Decode a TCX2+ NAK packet into ``(echoed_param_id, reason_code)``.
+
+    *data* may include or omit the trailing CRC — only the first 5 bytes
+    are read.  Caller is responsible for checking :func:`is_nak_packet`
+    first; this function raises ``ValueError`` otherwise.
+    """
+    if not is_nak_packet(data):
+        raise ValueError("Not a NAK packet (does not start with f8 ff)")
+    param_id = int.from_bytes(data[2:4], "big")
+    reason_code = data[4]
+    return param_id, reason_code

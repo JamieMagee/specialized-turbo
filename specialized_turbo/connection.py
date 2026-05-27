@@ -269,6 +269,10 @@ class SpecializedConnection:
 
         Writes a 2-byte big-endian parameter ID to CHAR_REQUEST_WRITE,
         then reads and parses the response.
+
+        If the bike rejects the request the returned ``ParsedMessage`` has
+        ``nak_reason`` set to the rejection code.  A warning is logged
+        with the parameter and reason for diagnostics.
         """
         if self._client is None:
             raise RuntimeError("Not connected")
@@ -281,7 +285,21 @@ class SpecializedConnection:
         response = await self._client.read_gatt_char(self._char_request_read)
         logger.debug("TCX request-read response: %s", bytes(response).hex())
         unpacked = self._session.unpack(response)
-        return parse_tcx_message(unpacked)
+        msg = parse_tcx_message(unpacked)
+
+        if msg.nak_reason is not None:
+            from .parameters import get_tcx_field
+
+            field_def = get_tcx_field(param_id)
+            field_name = field_def.name if field_def else f"param={param_id}"
+            logger.warning(
+                "Bike rejected TCX request for %s (param=%d, reason=0x%02x)",
+                field_name,
+                param_id,
+                msg.nak_reason,
+            )
+
+        return msg
 
     # -- write commands ----------------------------------------------------
 
@@ -339,9 +357,17 @@ class SpecializedConnection:
         Executes the full 7-step identification sequence.  Step 4 may
         return encryption key material.  Returns an encrypted
         ``TCXSession`` if a key is found, or an unencrypted one otherwise.
+
+        NAK responses (``f8 ff …``) are logged with the rejection reason
+        instead of being parsed as if they were valid data.
         """
         from .encryption import derive_key
-        from .framing import is_framed_packet, strip_clear_prefix, unpack_tcx
+        from .framing import (
+            is_framed_packet,
+            is_nak_packet,
+            parse_nak_packet,
+            unpack_tcx,
+        )
         from .parameters import BikeParameter
 
         assert self._client is not None
@@ -371,20 +397,37 @@ class SpecializedConnection:
                 len(response),
                 bytes(response).hex(),
             )
+
+            # Strip CRC if present so the NAK marker is visible.
+            inner = bytes(response)
+            if is_framed_packet(inner):
+                try:
+                    inner = unpack_tcx(inner)
+                except ValueError:
+                    pass
+
+            if is_nak_packet(inner):
+                echoed, reason = parse_nak_packet(inner)
+                logger.warning(
+                    "Identification step %d (%s) rejected by bike: "
+                    "echoed_param=%d reason=0x%02x",
+                    int(param),
+                    param.name,
+                    echoed,
+                    reason,
+                )
+                continue
+
             if param == BikeParameter.BATTERY1_FIRMWARE:
-                key_response = bytes(response)
+                key_response = inner
 
         if key_response is None or len(key_response) < 4:
             logger.debug("No encryption key in identification response")
             return TCXSession()
 
-        # Strip CRC framing if present, then strip f8ff envelope, then
-        # skip 2-byte param ID to get the key material.
-        payload = key_response
-        if is_framed_packet(payload):
-            payload = unpack_tcx(payload)
-        payload = strip_clear_prefix(payload)
-        key_data = payload[2:].rstrip(b"\x00")
+        # key_response is the inner payload (CRC and any NAK already
+        # filtered above).  Skip the 2-byte param ID to reach key material.
+        key_data = key_response[2:].rstrip(b"\x00")
 
         if len(key_data) == 0:
             logger.debug("Empty key response — bike does not require encryption")

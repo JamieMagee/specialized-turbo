@@ -140,19 +140,34 @@ async def _cmd_read(args: argparse.Namespace) -> None:
             sender, channel = tcu1_key
             msg = await conn.request_value(sender, channel)
         if args.format == "json":
-            print(
-                json.dumps(
-                    {
-                        "field": msg.field_name,
-                        "value": msg.converted_value,
-                        "raw": msg.raw_value,
-                        "unit": msg.unit,
-                    },
-                    default=str,
+            if msg.nak_reason is not None:
+                print(
+                    json.dumps(
+                        {
+                            "field": field_name,
+                            "rejected": True,
+                            "reason": msg.nak_reason,
+                        },
+                        default=str,
+                    )
                 )
-            )
+            else:
+                print(
+                    json.dumps(
+                        {
+                            "field": msg.field_name,
+                            "value": msg.converted_value,
+                            "raw": msg.raw_value,
+                            "unit": msg.unit,
+                        },
+                        default=str,
+                    )
+                )
         else:
-            print(f"{msg.field_name} = {msg.converted_value} {msg.unit}")
+            if msg.nak_reason is not None:
+                print(f"{field_name}: rejected by bike (reason 0x{msg.nak_reason:02x})")
+            else:
+                print(f"{msg.field_name} = {msg.converted_value} {msg.unit}")
 
 
 # ---------------------------------------------------------------------------

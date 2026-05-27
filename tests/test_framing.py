@@ -9,9 +9,12 @@ import pytest
 from specialized_turbo.framing import (
     FRAMED_PACKET_SIZE,
     FRAMED_PAYLOAD_SIZE,
+    NAK_PREFIX,
     compute_crc16_ccitt,
     is_framed_packet,
+    is_nak_packet,
     pack_tcx,
+    parse_nak_packet,
     strip_clear_prefix,
     unpack_tcx,
 )
@@ -115,38 +118,62 @@ class TestIsFramedPacket:
 
 
 class TestStripClearPrefix:
+    """``strip_clear_prefix`` is retained for backwards compatibility but
+    must no longer be used on the parse path.  The ``f8 ff`` prefix marks a
+    NAK rejection, not a wrapper around valid data.
+    """
+
     def test_strips_f8ff_prefix(self):
-        """Vado 3.0 battery charge response — f8ff envelope stripped."""
-        # After CRC stripping: f8ff 000c 05 000...
+        """Helper still strips the prefix when present."""
         payload = bytes.fromhex("f8ff000c050000000000000000000000")
         result = strip_clear_prefix(payload)
         assert result == bytes.fromhex("000c050000000000000000000000")
 
     def test_no_prefix_unchanged(self):
-        """Normal TCX payload without f8ff prefix — returned unchanged."""
         payload = bytes.fromhex("001a340000000000000000000000000000")
         result = strip_clear_prefix(payload)
         assert result == payload
 
     def test_too_short_unchanged(self):
-        """Data shorter than 4 bytes is never stripped."""
         assert strip_clear_prefix(b"\xf8\xff\x00") == b"\xf8\xff\x00"
         assert strip_clear_prefix(b"\xf8\xff") == b"\xf8\xff"
         assert strip_clear_prefix(b"") == b""
 
-    def test_vado30_system_state_response(self):
-        """Actual Vado 3.0 SYSTEM_STATE response after CRC strip."""
-        # f8ff 016b 05 00...  → param 363 (SYSTEM_STATE), data = 05
-        payload = bytes.fromhex("f8ff016b050000000000000000000000")
-        result = strip_clear_prefix(payload)
-        # After stripping: param_id=016b, data=05
-        assert result[:2] == b"\x01\x6b"
-        assert result[2] == 0x05
 
-    def test_vado30_battery_firmware_response(self):
-        """Actual Vado 3.0 BATTERY1_FIRMWARE response (no encryption key)."""
-        # f8ff 000e 05 00...  → param 14, data = 05
-        payload = bytes.fromhex("f8ff000e050000000000000000000000")
-        result = strip_clear_prefix(payload)
-        assert result[:2] == b"\x00\x0e"
-        assert result[2] == 0x05
+class TestIsNakPacket:
+    def test_nak_prefix(self):
+        # f8 ff [echoed_param 0x016b] [reason 0x05] ...
+        payload = bytes.fromhex("f8ff016b050000000000000000000000")
+        assert is_nak_packet(payload) is True
+
+    def test_non_nak_payload(self):
+        payload = bytes.fromhex("016b050000000000000000000000")
+        assert is_nak_packet(payload) is False
+
+    def test_short_payload(self):
+        assert is_nak_packet(b"\xf8\xff") is False
+        assert is_nak_packet(b"\xf8\xff\x00\x0c") is False
+        assert is_nak_packet(b"") is False
+
+    def test_nak_prefix_constant(self):
+        assert NAK_PREFIX == b"\xf8\xff"
+
+
+class TestParseNakPacket:
+    def test_system_state_rejection(self):
+        # Captured Vado 3.0 NAK for SYSTEM_STATE (363).
+        payload = bytes.fromhex("f8ff016b050000000000000000000000")
+        echoed_param, reason = parse_nak_packet(payload)
+        assert echoed_param == 363
+        assert reason == 0x05
+
+    def test_battery_charge_rejection(self):
+        # Captured Vado 3.0 NAK for BATTERY1_STATE_OF_CHARGE (26).
+        payload = bytes.fromhex("f8ff001a340000000000000000000000")
+        echoed_param, reason = parse_nak_packet(payload)
+        assert echoed_param == 26
+        assert reason == 0x34
+
+    def test_rejects_non_nak(self):
+        with pytest.raises(ValueError):
+            parse_nak_packet(bytes.fromhex("001a3400"))

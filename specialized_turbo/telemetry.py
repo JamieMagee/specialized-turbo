@@ -49,6 +49,7 @@ class TelemetryMonitor:
         self._snapshot = TelemetrySnapshot()
         self._running = False
         self._queue: asyncio.Queue[ParsedMessage | None] = asyncio.Queue()
+        self._nak_count = 0
         self.on_update: Callable[[ParsedMessage, TelemetrySnapshot], None] | None = None
         """Optional callback invoked after each notification is processed."""
 
@@ -60,6 +61,11 @@ class TelemetryMonitor:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def nak_count(self) -> int:
+        """Number of NAK (rejected) responses received since start."""
+        return self._nak_count
 
     async def start(self) -> None:
         """Subscribe to bike notifications and begin decoding."""
@@ -105,6 +111,19 @@ class TelemetryMonitor:
         except Exception:
             logger.warning(
                 "Failed to parse notification: %s", data.hex(), exc_info=True
+            )
+            return
+
+        # NAK responses carry a rejection reason rather than data.  Don't
+        # let them poison the snapshot or surface as fake telemetry to
+        # consumers.
+        if msg.nak_reason is not None:
+            self._nak_count += 1
+            logger.debug(
+                "NAK notification: echoed_param=%d reason=0x%02x (nak_count=%d)",
+                msg.raw_value,
+                msg.nak_reason,
+                self._nak_count,
             )
             return
 

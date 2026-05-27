@@ -373,8 +373,9 @@ class ParsedMessage(NamedTuple):
     channel: int
     raw_value: int
     converted_value: float | int | AssistLevel | None
-    field_name: str | None  # None if field is unknown
+    field_name: str | None  # None if field is unknown or response was a NAK
     unit: str
+    nak_reason: int | None = None  # Set when the bike rejected the request
 
 
 def parse_message(data: bytes | bytearray) -> ParsedMessage:
@@ -387,13 +388,31 @@ def parse_message(data: bytes | bytearray) -> ParsedMessage:
     CRC frame is detected, it is stripped automatically so TCU1-style
     sender/channel parsing can proceed on the inner payload.
 
+    If the inner payload is a NAK (starts with ``f8 ff``), a NAK-flagged
+    :class:`ParsedMessage` is returned with ``field_name=None`` and
+    ``nak_reason`` set.
+
     Raises ValueError if data is shorter than 3 bytes.
     """
-    from .framing import is_framed_packet
+    from .framing import is_framed_packet, is_nak_packet, parse_nak_packet
 
     # Detect 20-byte CRC-framed format used by TCX2+ bikes
     if is_framed_packet(data):
         data = data[:-2]  # strip 2-byte CRC trailer
+
+    # NAK rejection from the bike — surface the reason rather than
+    # parsing the rejection bytes as if they were valid data.
+    if is_nak_packet(data):
+        echoed_param, reason = parse_nak_packet(data)
+        return ParsedMessage(
+            sender=data[0],
+            channel=data[1],
+            raw_value=echoed_param,
+            converted_value=None,
+            field_name=None,
+            unit="",
+            nak_reason=reason,
+        )
 
     if len(data) < 3:
         raise ValueError(f"Message too short ({len(data)} bytes), need at least 3")
@@ -533,23 +552,34 @@ def parse_tcx_message(data: bytes | bytearray) -> ParsedMessage:
 
     Format: [param_id_hi: 1B] [param_id_lo: 1B] [data: 0-16B little-endian]
 
-    Some bikes wrap responses in an ``f8 ff`` system-response envelope.
-    The prefix is stripped automatically before extracting the parameter ID.
+    If the message is a NAK (starts with ``f8 ff``), a NAK-flagged
+    :class:`ParsedMessage` is returned with ``field_name=None`` and
+    ``nak_reason`` set to the rejection code from the bike.  Earlier
+    versions of this library stripped the ``f8 ff`` prefix and parsed the
+    rejection code as if it were valid data, producing bogus telemetry.
 
     The parameter ID is a 16-bit big-endian value that maps to a
     :class:`~parameters.BikeParameter`.
     """
-    from .framing import strip_clear_prefix
+    from .framing import is_nak_packet, parse_nak_packet
     from .parameters import decode_parameter_id, get_tcx_field
 
     if len(data) < 2:
         raise ValueError(f"TCX message too short ({len(data)} bytes), need at least 2")
 
-    # Strip f8ff system-response envelope if present
-    data = strip_clear_prefix(data)
-
-    if len(data) < 2:
-        raise ValueError(f"TCX message too short ({len(data)} bytes), need at least 2")
+    # NAK rejection from the bike.  Surface the echoed parameter ID and
+    # reason code; do not attempt to decode the remaining bytes as data.
+    if is_nak_packet(data):
+        echoed_param, reason = parse_nak_packet(data)
+        return ParsedMessage(
+            sender=0xF8,
+            channel=0xFF,
+            raw_value=echoed_param,
+            converted_value=None,
+            field_name=None,
+            unit="",
+            nak_reason=reason,
+        )
 
     param_id = decode_parameter_id(data)
     payload = data[2:]

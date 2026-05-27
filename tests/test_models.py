@@ -362,25 +362,30 @@ class TestTCXFieldNameRouting:
         assert snap.battery.charge_pct == 52
 
     def test_parse_tcx_message_with_f8ff_prefix(self):
-        """Vado 3.0 wraps responses in f8ff envelope — should be stripped."""
+        """``f8 ff`` is a NAK marker — parse it as a rejection, not as data."""
         from specialized_turbo.protocol import parse_tcx_message
 
-        # Actual Vado 3.0 SYSTEM_STATE response (after CRC strip):
-        # f8ff 016b 05 00... → param 363, data = 5
+        # Captured Vado 3.0 response: f8ff 016b 05 00...
+        # echoed_param=363 (SYSTEM_STATE), reason=0x05.
         payload = bytes.fromhex("f8ff016b050000000000000000000000")
         msg = parse_tcx_message(payload)
-        assert msg.field_name == "system_state"
-        assert msg.converted_value == 5
+        assert msg.nak_reason == 0x05
+        assert msg.raw_value == 363  # echoed parameter ID
+        assert msg.field_name is None
+        assert msg.converted_value is None
 
     def test_parse_tcx_f8ff_battery_charge(self):
-        """Vado 3.0 battery charge response with f8ff envelope."""
+        """A NAK for the battery-charge request does not update the snapshot."""
         from specialized_turbo.protocol import parse_tcx_message
 
         snap = TelemetrySnapshot()
-        # f8ff 001a 34 00... → param 26 (BATTERY1_STATE_OF_CHARGE), data = 0x34 (52%)
+        # f8ff 001a 34 00... — echoed_param=26 (BATTERY1_STATE_OF_CHARGE),
+        # reason=0x34.  Earlier code parsed reason 0x34 as SOC=52%.
         payload = bytes.fromhex("f8ff001a340000000000000000000000")
         msg = parse_tcx_message(payload)
-        assert msg.field_name == "battery_charge_percent"
-        assert msg.converted_value == 52
+        assert msg.nak_reason == 0x34
+        assert msg.raw_value == 26  # echoed parameter ID
+        assert msg.field_name is None
         snap.update_from_message(msg)
-        assert snap.battery.charge_pct == 52
+        # NAK must not produce telemetry — battery state stays empty.
+        assert snap.battery.charge_pct is None

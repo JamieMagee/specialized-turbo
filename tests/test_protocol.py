@@ -748,26 +748,25 @@ class TestFramedFormat:
     The payload contains [sender, channel, data..., zero-padding].
     """
 
-    def test_framed_battery_charge_percent(self):
-        """Real response from Vado 3.0 request-read: battery_charge_percent=5%."""
-        # f8 ff 00 0c 05 00*13 e6 ca  (real capture, valid CRC)
+    def test_framed_nak_battery_charge_percent(self):
+        """Vado 3.0 request-read for battery SoC returns a NAK, not 5%."""
+        # f8 ff 00 0c 05 00*13 e6 ca  (real capture, valid CRC).
+        # Earlier interpretation: SoC=5%.  Real meaning: echoed_param=12 was
+        # rejected with reason 0x05.
         data = bytes.fromhex("f8ff000c0500000000000000000000000000e6ca")
         msg = parse_message(data)
-        # After CRC stripping, sender=0xf8, channel=0xff from the 18-byte payload.
-        # These are the raw first two bytes; parse_message treats them as sender/channel.
-        # For TCU1-style parsing of CRC-framed data, the F8 FF are part of the payload.
-        # The actual telemetry data (00 0c 05) starts at byte 2 of the unframed payload.
-        # This test verifies CRC stripping works — the payload is passed as-is.
-        assert msg.sender == 0xF8
-        assert msg.channel == 0xFF
+        assert msg.nak_reason == 0x05
+        assert msg.field_name is None
 
-    def test_framed_battery_capacity_wh(self):
-        """Real response from Vado 3.0 pairing trigger read."""
-        # f8 ff 00 00 04 00 00*12 70 0d  (real capture, valid CRC)
+    def test_framed_nak_battery_capacity_wh(self):
+        """Vado 3.0 pairing trigger read returns a NAK, not 4 Wh."""
+        # f8 ff 00 00 04 00 00*12 70 0d  (real capture, valid CRC).
+        # Earlier interpretation: capacity=4Wh.  Real meaning: echoed_param=0
+        # was rejected with reason 0x04.
         data = bytes.fromhex("f8ff00000400000000000000000000000000700d")
         msg = parse_message(data)
-        assert msg.sender == 0xF8
-        assert msg.channel == 0xFF
+        assert msg.nak_reason == 0x04
+        assert msg.field_name is None
 
     def test_framed_with_pack_tcx(self):
         """Build a valid CRC-framed packet and verify parse_message strips CRC."""
