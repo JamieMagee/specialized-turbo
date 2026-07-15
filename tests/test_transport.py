@@ -24,6 +24,7 @@ from specialized_turbo.transport import (
     NotificationCallback,
     TCXNotificationTransport,
     TCXRequestTimeoutError,
+    TraceCallback,
 )
 
 
@@ -75,9 +76,17 @@ class _FakeClient:
 
 def _transport(
     client: _FakeClient,
-    **kwargs: object,
+    *,
+    session: TCXSession | None = None,
+    request_timeout: float = 7.0,
+    trace_callback: TraceCallback | None = None,
 ) -> TCXNotificationTransport:
-    return TCXNotificationTransport(cast(BleakClient, client), **kwargs)
+    return TCXNotificationTransport(
+        cast(BleakClient, client),
+        session=session,
+        request_timeout=request_timeout,
+        trace_callback=trace_callback,
+    )
 
 
 def test_identification_frame_matches_official_app() -> None:
@@ -110,9 +119,7 @@ async def test_request_writes_framed_packet_and_awaits_notification() -> None:
     transport = _transport(client)
 
     def respond(characteristic: str, packet: bytes) -> None:
-        service = get_service_characteristics(
-            BLEProfile.TCX, BLEServiceID.REQUEST
-        )
+        service = get_service_characteristics(BLEProfile.TCX, BLEServiceID.REQUEST)
         assert characteristic == service.write
         assert unpack_tcx(packet)[:2] == bytes.fromhex("001a")
         client.notify(

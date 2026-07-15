@@ -108,9 +108,7 @@ class TCXNotificationTransport:
         if service_id in self._subscribed:
             return
 
-        characteristic = get_service_characteristics(
-            BLEProfile.TCX, service_id
-        ).notify
+        characteristic = get_service_characteristics(BLEProfile.TCX, service_id).notify
 
         def callback(
             sender: BleakGATTCharacteristic,
@@ -188,9 +186,7 @@ class TCXNotificationTransport:
         data: bytes | bytearray,
     ) -> None:
         """Write an already-framed packet without response."""
-        characteristic = get_service_characteristics(
-            BLEProfile.TCX, service_id
-        ).write
+        characteristic = get_service_characteristics(BLEProfile.TCX, service_id).write
         packet = bytes(data)
         self._emit_trace("tx", service_id, characteristic, packet)
         await self._client.write_gatt_char(
