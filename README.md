@@ -104,6 +104,12 @@ Dump GATT services (debugging):
 specialized-turbo services DC:DD:BB:4A:D6:55 --pin 946166
 ```
 
+Capture complete TCX writes and notifications for protocol debugging:
+
+```bash
+specialized-turbo capture DC:DD:BB:4A:D6:55 --duration 60 > tcx-capture.tsv
+```
+
 ## Available fields
 
 | Field | Unit | Writable | Description |

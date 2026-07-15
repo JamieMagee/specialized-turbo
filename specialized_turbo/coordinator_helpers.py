@@ -19,23 +19,22 @@ from .framing import (
     is_framed_packet,
     is_nak_packet,
     parse_nak_packet,
-    unpack_tcx,
 )
 from .models import TelemetrySnapshot
 from .parameters import BikeParameter
 from .protocol import (
     TCU1_POLL_FIELDS,
     build_request,
-    build_tcx_request,
     parse_message,
     parse_tcx_message,
     ParsedMessage,
 )
 from .session import ProtocolSession, TCXSession
+from .transport import TCXNotificationTransport
 
 logger = logging.getLogger(__name__)
 
-#: TCX2+ parameter IDs to poll via request-read.
+#: TCX2+ parameter IDs to query through write/notification transactions.
 TCX_POLL_PARAMS: tuple[BikeParameter, ...] = (
     BikeParameter.SYSTEM_STATE,
     BikeParameter.SYSTEM_RANGE_LONG,
@@ -105,25 +104,25 @@ async def poll_tcu1(
 
 
 async def poll_tcx(
-    client: BleakClient,
-    session: ProtocolSession,
-    char_request_write: str,
-    char_request_read: str,
+    transport: TCXNotificationTransport,
     snapshot: TelemetrySnapshot,
 ) -> bool:
-    """Poll TCX system fields via request-read and update *snapshot*.
+    """Poll TCX fields through write/notification transactions.
 
     Returns ``True`` if any field was updated.
     """
     updated = False
     for param in TCX_POLL_PARAMS:
         try:
-            request = build_tcx_request(int(param))
-            await client.write_gatt_char(char_request_write, request)
-            await asyncio.sleep(0.1)
-            response = await client.read_gatt_char(char_request_read)
-            unpacked = session.unpack(response)
-            msg = parse_tcx_message(unpacked)
+            response = await transport.request_parameter(int(param))
+            msg = parse_tcx_message(response)
+            if msg.nak_reason is not None:
+                logger.debug(
+                    "TCX param %d rejected with reason 0x%02x",
+                    int(param),
+                    msg.nak_reason,
+                )
+                continue
             snapshot.update_from_message(msg)
             updated = True
         except Exception:  # noqa: BLE001
@@ -132,9 +131,7 @@ async def poll_tcx(
 
 
 async def identify_tcx(
-    client: BleakClient,
-    char_request_write: str,
-    char_request_read: str,
+    transport: TCXNotificationTransport,
 ) -> TCXSession:
     """Run the TCX identification handshake and return a session.
 
@@ -159,16 +156,7 @@ async def identify_tcx(
 
     try:
         for param in steps:
-            request = build_tcx_request(int(param))
-            await client.write_gatt_char(char_request_write, request)
-            await asyncio.sleep(0.15)
-            response = await client.read_gatt_char(char_request_read)
-            inner = bytes(response)
-            if is_framed_packet(inner):
-                try:
-                    inner = unpack_tcx(inner)
-                except ValueError:
-                    pass
+            inner = await transport.request_parameter(int(param))
 
             if is_nak_packet(inner):
                 echoed, reason = parse_nak_packet(inner)

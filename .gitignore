@@ -20,5 +20,8 @@ build/
 Thumbs.db
 .DS_Store
 
+# Local protocol-analysis inputs
+/*.xapk
+
 # uv
 uv.lock

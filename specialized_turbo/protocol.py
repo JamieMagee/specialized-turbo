@@ -31,6 +31,23 @@ class BLEProfile(StrEnum):
     TCX = "tcx"  # 2019+ Vado/Levo/Creo (TURBOHMI2017, Nordic mfr ID)
 
 
+class BLEServiceID(IntEnum):
+    """Logical Specialized GATT service."""
+
+    REQUEST = 1
+    COMMAND = 2
+    DATA = 3
+
+
+@dataclass(frozen=True, slots=True)
+class BLEServiceCharacteristics:
+    """UUIDs for one Specialized service's notify/write pair."""
+
+    service: str
+    notify: str
+    write: str
+
+
 # ---------------------------------------------------------------------------
 # UUID definitions
 # ---------------------------------------------------------------------------
@@ -76,15 +93,22 @@ SERVICE_DATA_WRITE = _uuid(0x0002)  # Write command service
 
 # Characteristic UUIDs
 CHAR_NOTIFY = _uuid(0x0013)  # READ, NOTIFY — bike pushes telemetry here
-CHAR_REQUEST_WRITE = _uuid(0x0021)  # WRITE — send a 2-byte request here
-CHAR_REQUEST_READ = _uuid(0x0011)  # READ — read the response after writing to 0x0021
-CHAR_WRITE = _uuid(0x0012)  # WRITE — send commands (assist level, settings)
+CHAR_REQUEST_WRITE = _uuid(0x0021)  # WRITE_NO_RESP — send requests here
+CHAR_REQUEST_READ = _uuid(0x0011)  # READ, NOTIFY — request responses arrive here
+CHAR_WRITE = _uuid(0x0012)  # READ, NOTIFY — command responses arrive here
 CHAR_WRITE_NO_RESP_S2 = _uuid(
     0x0022
-)  # WRITE_NO_RESP — DFU / ride log writes (service 2)
+)  # WRITE_NO_RESP — command / ride-log writes (service 2)
 CHAR_WRITE_NO_RESP_S3 = _uuid(
     0x0023
-)  # WRITE_NO_RESP — DFU / ride log writes (service 3)
+)  # WRITE_NO_RESP — parameter writes / stream control (service 3)
+
+# Canonical role names. Keep the older names above for compatibility.
+CHAR_REQUEST_NOTIFY = CHAR_REQUEST_READ
+CHAR_COMMAND_NOTIFY = CHAR_WRITE
+CHAR_COMMAND_WRITE = CHAR_WRITE_NO_RESP_S2
+CHAR_DATA_NOTIFY = CHAR_NOTIFY
+CHAR_DATA_WRITE = CHAR_WRITE_NO_RESP_S3
 
 # ------ TCU1 UUIDs ------
 
@@ -140,6 +164,19 @@ def get_char_request_write(generation: BLEProfile) -> str:
 def get_char_write(generation: BLEProfile) -> str:
     """Return the CHAR_WRITE UUID for the given protocol generation."""
     return _CHAR_WRITE_MAP[generation]
+
+
+def get_service_characteristics(
+    generation: BLEProfile,
+    service_id: BLEServiceID,
+) -> BLEServiceCharacteristics:
+    """Return the notify/write UUID pair for a Specialized GATT service."""
+    service = int(service_id)
+    return BLEServiceCharacteristics(
+        service=get_uuid(generation, service),
+        notify=get_uuid(generation, 0x0010 | service),
+        write=get_uuid(generation, 0x0020 | service),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -510,7 +547,7 @@ def build_request(sender: int, channel: int) -> bytes:
 
 
 def build_tcx_request(param_id: int) -> bytes:
-    """Build the 2-byte query payload for TCX2+ request-read."""
+    """Build the 2-byte payload for a TCX2+ notification-backed query."""
     from .parameters import encode_parameter_id
 
     return encode_parameter_id(param_id)
@@ -520,7 +557,7 @@ def build_write_command(sender: int, channel: int, data: bytes | bytearray) -> b
     """
     Build a TCU1 write command: ``[sender, channel, data...]``.
 
-    Written to CHAR_WRITE (``0x0012``).  Example::
+    Written to the TCU1 command characteristic.  Example::
 
         build_write_command(0x01, 0x05, bytes([2]))  # set assist to TRAIL
     """
@@ -532,7 +569,7 @@ def build_tcx_write(param_id: int, data: bytes | bytearray) -> bytes:
     Build a TCX2+ write command: ``[param_id_be, data...]``.
 
     The result should be passed through ``session.pack()`` before writing
-    to CHAR_WRITE.  Example::
+    without response to the service 3 write characteristic.  Example::
 
         build_tcx_write(143, bytes([2]))  # set travel mode
     """

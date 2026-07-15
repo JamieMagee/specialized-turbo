@@ -1,7 +1,7 @@
 """
 BLE scanning and connection for Specialized Turbo bikes.
 
-Wraps bleak to handle discovery, pairing, notifications, and request-read queries.
+Wraps bleak to handle discovery, pairing, notifications, and parameter queries.
 """
 
 from __future__ import annotations
@@ -12,14 +12,13 @@ from collections.abc import Callable
 from typing import Any
 
 from bleak import BleakClient, BleakScanner
-from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
+from .coordinator_helpers import identify_tcx
 from .protocol import (
     BLEProfile,
     build_request,
-    build_tcx_request,
     get_char_notify,
     get_char_request_read,
     get_char_request_write,
@@ -30,6 +29,11 @@ from .protocol import (
     ParsedMessage,
 )
 from .session import ProtocolSession, TCU1Session, TCXSession
+from .transport import (
+    NotificationCallback,
+    TCXNotificationTransport,
+    TraceCallback,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +95,7 @@ class SpecializedConnection:
             await asyncio.sleep(30)
 
     Handles connecting, BLE pairing (passkey entry), subscribing to
-    telemetry notifications, and request-read queries.
+    telemetry notifications, and parameter queries.
     """
 
     def __init__(
@@ -101,6 +105,7 @@ class SpecializedConnection:
         pin: str | None = None,
         generation: BLEProfile = BLEProfile.TCX,
         disconnect_callback: Callable[[BleakClient], None] | None = None,
+        trace_callback: TraceCallback | None = None,
     ) -> None:
         """
         Parameters
@@ -115,6 +120,8 @@ class SpecializedConnection:
             GATT UUIDs to use.  Defaults to TCX.
         disconnect_callback :
             Optional callback invoked if the bike disconnects unexpectedly.
+        trace_callback :
+            Optional callback receiving every raw TCX write and notification.
         """
         self._address = address_or_device
         self._pin = pin
@@ -126,6 +133,9 @@ class SpecializedConnection:
         self._client: BleakClient | None = None
         self._session: ProtocolSession = TCU1Session()
         self._disconnect_cb = disconnect_callback
+        self._trace_callback = trace_callback
+        self._tcx_transport: TCXNotificationTransport | None = None
+        self._telemetry_callback: NotificationCallback | None = None
         self._notification_started = False
 
     # -- context manager --------------------------------------------------
@@ -150,21 +160,18 @@ class SpecializedConnection:
         await self._client.connect()
         logger.info("BLE connected, is_connected=%s", self._client.is_connected)
 
-        # On Windows (WinRT), bleak supports pairing with a passkey.
-        # Trigger pairing by attempting a read on the data characteristic.
-        # This initiates the MITM + Secure Connections auth flow.
-        try:
-            logger.debug("Triggering pairing by reading CHAR_NOTIFY ...")
-            await self._client.read_gatt_char(self._char_notify)
-        except Exception as exc:
-            logger.debug(
-                "Initial read raised %s (expected during pairing): %s",
-                type(exc).__name__,
-                exc,
-            )
-
         # Attempt explicit pairing if a PIN was provided
         if self._pin is not None:
+            # A protected characteristic access prompts WinRT for passkey entry.
+            try:
+                logger.debug("Triggering pairing by reading CHAR_NOTIFY ...")
+                await self._client.read_gatt_char(self._char_notify)
+            except Exception as exc:
+                logger.debug(
+                    "Initial read raised %s (expected during pairing): %s",
+                    type(exc).__name__,
+                    exc,
+                )
             try:
                 logger.info("Requesting pairing with PIN %s ...", self._pin)
                 await self._client.pair(
@@ -182,8 +189,17 @@ class SpecializedConnection:
 
         # Create protocol session
         if self._generation == BLEProfile.TCX:
-            session = await self._identify_tcx()
+            self._session = TCXSession()
+            self._tcx_transport = TCXNotificationTransport(
+                self._client,
+                session=self._session,
+                trace_callback=self._trace_callback,
+            )
+            await self._tcx_transport.subscribe_for_identification()
+            session = await identify_tcx(self._tcx_transport)
             self._session = session
+            self._tcx_transport.session = session
+            await self._tcx_transport.subscribe_for_realtime()
         else:
             self._session = TCU1Session()
 
@@ -194,13 +210,18 @@ class SpecializedConnection:
         if self._client and self._client.is_connected:
             if self._notification_started:
                 try:
-                    await self._client.stop_notify(self._char_notify)
+                    await self.unsubscribe_notifications()
                 except Exception:
-                    pass
-                self._notification_started = False
+                    logger.debug("Failed to disable telemetry stream", exc_info=True)
+            if self._tcx_transport is not None:
+                try:
+                    await self._tcx_transport.unsubscribe_all()
+                except Exception:
+                    logger.debug("Failed to stop TCX notifications", exc_info=True)
             await self._client.disconnect()
             logger.info("Disconnected from %s", self._address)
         self._client = None
+        self._tcx_transport = None
 
     @property
     def is_connected(self) -> bool:
@@ -215,23 +236,47 @@ class SpecializedConnection:
 
     async def subscribe_notifications(
         self,
-        callback: Callable[[BleakGATTCharacteristic, bytearray], None],
+        callback: NotificationCallback,
     ) -> None:
         """Start receiving telemetry notifications. Callback gets (characteristic, data)."""
         if self._client is None:
             raise RuntimeError("Not connected")
-        await self._client.start_notify(self._char_notify, callback)
+
+        if self._generation == BLEProfile.TCX:
+            if self._tcx_transport is None:
+                raise RuntimeError("TCX transport is not initialized")
+            self._tcx_transport.add_listener(callback)
+            self._telemetry_callback = callback
+            try:
+                await self._tcx_transport.set_realtime_enabled(True)
+            except Exception:
+                self._tcx_transport.remove_listener(callback)
+                self._telemetry_callback = None
+                raise
+        else:
+            await self._client.start_notify(self._char_notify, callback)
         self._notification_started = True
         logger.info("Subscribed to telemetry notifications")
 
     async def unsubscribe_notifications(self) -> None:
         """Stop receiving telemetry notifications."""
         if self._client and self._notification_started:
-            await self._client.stop_notify(self._char_notify)
+            if self._generation == BLEProfile.TCX:
+                if self._tcx_transport is not None:
+                    try:
+                        await self._tcx_transport.set_realtime_enabled(False)
+                    finally:
+                        if self._telemetry_callback is not None:
+                            self._tcx_transport.remove_listener(
+                                self._telemetry_callback
+                            )
+                        self._telemetry_callback = None
+            else:
+                await self._client.stop_notify(self._char_notify)
             self._notification_started = False
             logger.info("Unsubscribed from notifications")
 
-    # -- request-read -----------------------------------------------------
+    # -- parameter queries ------------------------------------------------
 
     async def request_value(self, sender: int, channel: int) -> ParsedMessage:
         """
@@ -265,27 +310,21 @@ class SpecializedConnection:
 
     async def request_tcx_value(self, param_id: int) -> ParsedMessage:
         """
-        Query a specific value using the TCX2+ request-read pattern.
+        Query a TCX2+ value through a write/notification transaction.
 
-        Writes a 2-byte big-endian parameter ID to CHAR_REQUEST_WRITE,
-        then reads and parses the response.
+        Writes a CRC-framed parameter request without response, then waits for
+        the matching notification from the bike.
 
         If the bike rejects the request the returned ``ParsedMessage`` has
         ``nak_reason`` set to the rejection code.  A warning is logged
         with the parameter and reason for diagnostics.
         """
-        if self._client is None:
+        if self._client is None or self._tcx_transport is None:
             raise RuntimeError("Not connected")
-        request_bytes = build_tcx_request(param_id)
-        logger.debug("TCX request-write param %d: %s", param_id, request_bytes.hex())
-        await self._client.write_gatt_char(self._char_request_write, request_bytes)
-
-        await asyncio.sleep(0.1)
-
-        response = await self._client.read_gatt_char(self._char_request_read)
-        logger.debug("TCX request-read response: %s", bytes(response).hex())
-        unpacked = self._session.unpack(response)
-        msg = parse_tcx_message(unpacked)
+        logger.debug("TCX notification request param %d", param_id)
+        response = await self._tcx_transport.request_parameter(param_id)
+        logger.debug("TCX notification response: %s", response.hex())
+        msg = parse_tcx_message(response)
 
         if msg.nak_reason is not None:
             from .parameters import get_tcx_field
@@ -314,9 +353,18 @@ class SpecializedConnection:
         """
         if self._client is None:
             raise RuntimeError("Not connected")
-        packed = self._session.pack(data)
-        logger.debug("Write command: %s", packed.hex())
-        await self._client.write_gatt_char(self._char_write, packed)
+        if self._generation == BLEProfile.TCX:
+            if self._tcx_transport is None:
+                raise RuntimeError("TCX transport is not initialized")
+            packed = self._session.pack(data)
+            logger.debug("TCX write command: %s", packed.hex())
+            from .protocol import BLEServiceID
+
+            await self._tcx_transport.write_frame(BLEServiceID.DATA, packed)
+        else:
+            packed = self._session.pack(data)
+            logger.debug("Write command: %s", packed.hex())
+            await self._client.write_gatt_char(self._char_write, packed)
 
     async def set_assist_level(self, level: int) -> None:
         """Set the assist level (0=OFF, 1=ECO, 2=TRAIL, 3=TURBO)."""
@@ -349,115 +397,11 @@ class SpecializedConnection:
 
         await self.write_command(build_write_command(0x01, 0x15, bytes([value])))
 
-    # -- TCX identification -----------------------------------------------
-
-    async def _identify_tcx(self) -> TCXSession:
-        """Run the TCX identification handshake and return an appropriate session.
-
-        Executes the full 7-step identification sequence.  Step 4 may
-        return encryption key material.  Returns an encrypted
-        ``TCXSession`` if a key is found, or an unencrypted one otherwise.
-
-        NAK responses (``f8 ff …``) are logged with the rejection reason
-        instead of being parsed as if they were valid data.
-        """
-        from .encryption import derive_key
-        from .framing import (
-            is_framed_packet,
-            is_nak_packet,
-            parse_nak_packet,
-            unpack_tcx,
-        )
-        from .parameters import BikeParameter
-
-        assert self._client is not None
-
-        logger.debug("Starting TCX identification handshake")
-
-        steps = [
-            BikeParameter.SYSTEM_GET_NEW_VI,  # 300
-            BikeParameter.SYSTEM_HMI_PROTOCOL_VERSION,  # 310
-            BikeParameter.SYSTEM_STATE,  # 363
-            BikeParameter.BATTERY1_FIRMWARE,  # 14 — encryption key
-            BikeParameter.SYSTEM_HMI_HW_VERSION,  # 308
-            BikeParameter.SYSTEM_MOTOR_TYPE,  # 329
-            BikeParameter.SYSTEM_EBIKE_SERIAL_NUMBER,  # 290
-        ]
-
-        key_response: bytes | None = None
-
-        for param in steps:
-            request = build_tcx_request(int(param))
-            await self._client.write_gatt_char(self._char_request_write, request)
-            await asyncio.sleep(0.15)
-            response = await self._client.read_gatt_char(self._char_request_read)
-            logger.debug(
-                "Identification step %d: %d bytes: %s",
-                int(param),
-                len(response),
-                bytes(response).hex(),
-            )
-
-            # Strip CRC if present so the NAK marker is visible.
-            inner = bytes(response)
-            if is_framed_packet(inner):
-                try:
-                    inner = unpack_tcx(inner)
-                except ValueError:
-                    pass
-
-            if is_nak_packet(inner):
-                echoed, reason = parse_nak_packet(inner)
-                logger.warning(
-                    "Identification step %d (%s) rejected by bike: "
-                    "echoed_param=%d reason=0x%02x",
-                    int(param),
-                    param.name,
-                    echoed,
-                    reason,
-                )
-                continue
-
-            if param == BikeParameter.BATTERY1_FIRMWARE:
-                key_response = inner
-
-        if key_response is None or len(key_response) < 4:
-            logger.debug("No encryption key in identification response")
-            return TCXSession()
-
-        # key_response is the inner payload (CRC and any NAK already
-        # filtered above).  Skip the 2-byte param ID to reach key material.
-        key_data = key_response[2:].rstrip(b"\x00")
-
-        if len(key_data) == 0:
-            logger.debug("Empty key response — bike does not require encryption")
-            return TCXSession()
-
-        # A valid base64 encryption key is 64 chars (~48 decoded bytes).
-        # Short responses (e.g. a single firmware-version byte) are not keys.
-        if len(key_data) < 20:
-            logger.debug(
-                "Key response too short for encryption (%d bytes) "
-                "— bike does not require encryption",
-                len(key_data),
-            )
-            return TCXSession()
-
-        try:
-            aes_key = derive_key(key_data.decode("ascii"))
-            logger.info("TCX encryption key derived")
-            return TCXSession(key=aes_key, iv=b"\x00" * 16)
-        except Exception:
-            logger.warning(
-                "Failed to derive encryption key, using unencrypted session",
-                exc_info=True,
-            )
-            return TCXSession()
-
     # -- internal ---------------------------------------------------------
 
     def _on_disconnect(self, client: BleakClient) -> None:
         logger.warning("Disconnected from bike!")
         self._notification_started = False
+        self._tcx_transport = None
         if self._disconnect_cb:
             self._disconnect_cb(client)

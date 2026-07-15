@@ -15,9 +15,12 @@ from collections.abc import AsyncIterator, Callable
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
 from .connection import SpecializedConnection
+from .coordinator_helpers import TCX_POLL_PARAMS
+from .framing import is_realtime_packet
 from .models import TelemetrySnapshot
 from .protocol import parse_message, parse_tcx_message, ParsedMessage
 from .session import TCXSession
+from .transport import TCXRequestTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,7 @@ class TelemetryMonitor:
         self._running = False
         self._queue: asyncio.Queue[ParsedMessage | None] = asyncio.Queue()
         self._nak_count = 0
+        self._reported_realtime_bundle = False
         self.on_update: Callable[[ParsedMessage, TelemetrySnapshot], None] | None = None
         """Optional callback invoked after each notification is processed."""
 
@@ -72,7 +76,14 @@ class TelemetryMonitor:
         if self._running:
             return
         self._running = True
-        await self._conn.subscribe_notifications(self._notification_handler)
+        try:
+            await self._conn.subscribe_notifications(self._notification_handler)
+            if isinstance(self._conn.session, TCXSession):
+                await self._prime_tcx_snapshot()
+        except Exception:
+            self._running = False
+            await self._conn.unsubscribe_notifications()
+            raise
         logger.info("TelemetryMonitor started")
 
     async def stop(self) -> None:
@@ -105,6 +116,14 @@ class TelemetryMonitor:
             session = self._conn.session
             unpacked = session.unpack(data)
             if isinstance(session, TCXSession):
+                if is_realtime_packet(unpacked):
+                    if not self._reported_realtime_bundle:
+                        logger.info(
+                            "Receiving bundled TCX real-time data; "
+                            "using notification-backed queries for snapshot values"
+                        )
+                        self._reported_realtime_bundle = True
+                    return
                 msg = parse_tcx_message(unpacked)
             else:
                 msg = parse_message(unpacked)
@@ -144,6 +163,18 @@ class TelemetryMonitor:
                 logger.warning("on_update callback raised", exc_info=True)
 
         self._queue.put_nowait(msg)
+
+    async def _prime_tcx_snapshot(self) -> None:
+        """Query the initial TCX values through the notification transport."""
+        for param in TCX_POLL_PARAMS:
+            try:
+                await self._conn.request_tcx_value(int(param))
+            except TCXRequestTimeoutError:
+                logger.warning(
+                    "Timed out while priming TCX telemetry at parameter %d",
+                    int(param),
+                )
+                break
 
 
 async def run_telemetry_session(

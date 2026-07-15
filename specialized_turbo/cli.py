@@ -13,6 +13,9 @@ import asyncio
 import json
 import logging
 import sys
+import time
+
+from bleak.backends.characteristic import BleakGATTCharacteristic
 
 from .connection import scan_for_bikes, SpecializedConnection
 from .parameters import all_tcx_fields
@@ -20,6 +23,7 @@ from .protocol import (
     all_field_defs,
 )
 from .telemetry import run_telemetry_session
+from .transport import BLETraceEvent
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -256,6 +260,45 @@ async def _cmd_services(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# capture (debug helper)
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_capture(args: argparse.Namespace) -> None:
+    """Capture complete TCX writes and notifications as tab-separated hex."""
+    started = time.monotonic()
+
+    def trace(event: BLETraceEvent) -> None:
+        elapsed = event.timestamp - started
+        print(
+            f"{elapsed:.6f}\t{event.direction.upper()}\t"
+            f"{int(event.service_id)}\t{event.characteristic}\t{event.data.hex()}",
+            flush=True,
+        )
+
+    def discard(
+        _sender: BleakGATTCharacteristic,
+        _data: bytearray,
+    ) -> None:
+        pass
+
+    print("seconds\tdirection\tservice\tcharacteristic\tpayload", flush=True)
+    async with SpecializedConnection(
+        args.address,
+        pin=args.pin,
+        trace_callback=trace,
+    ) as conn:
+        await conn.subscribe_notifications(discard)
+        try:
+            if args.duration > 0:
+                await asyncio.sleep(args.duration)
+            else:
+                await asyncio.Event().wait()
+        finally:
+            await conn.unsubscribe_notifications()
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -302,6 +345,21 @@ def main(argv: list[str] | None = None) -> None:
     p_svc.add_argument("address", help="BLE MAC address")
     p_svc.add_argument("-p", "--pin", type=str, default=None, help="Pairing PIN")
 
+    # --- capture ---
+    p_capture = sub.add_parser(
+        "capture",
+        help="Capture raw TCX writes and notifications",
+    )
+    p_capture.add_argument("address", help="BLE MAC address")
+    p_capture.add_argument("-p", "--pin", type=str, default=None, help="Pairing PIN")
+    p_capture.add_argument(
+        "-d",
+        "--duration",
+        type=float,
+        default=60,
+        help="Capture duration in seconds (0=forever)",
+    )
+
     # --- write ---
     p_write = sub.add_parser(
         "write",
@@ -320,6 +378,7 @@ def main(argv: list[str] | None = None) -> None:
         "telemetry": _cmd_telemetry,
         "read": _cmd_read,
         "services": _cmd_services,
+        "capture": _cmd_capture,
         "write": _cmd_write,
     }[args.command](args)
 

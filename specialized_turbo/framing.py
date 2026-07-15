@@ -30,6 +30,7 @@ NAK_BYTE = 0x0A
 # "system response envelope" and parsed the reason byte as data — that was
 # wrong and produced bogus telemetry (e.g. SoC=5%, capacity=4Wh).
 NAK_PREFIX = b"\xf8\xff"
+REALTIME_PREFIX = b"\xf8\xf4"
 
 # Backwards-compatible alias.  Older code referred to NAK_PREFIX as a
 # "clear-prefix" envelope.  Keep the name so existing imports don't break.
@@ -116,6 +117,11 @@ def is_nak_packet(data: bytes | bytearray) -> bool:
     a one-byte reason code.  See :data:`NAK_PREFIX`.
     """
     return len(data) >= 5 and data[0] == 0xF8 and data[1] == 0xFF
+
+
+def is_realtime_packet(data: bytes | bytearray) -> bool:
+    """Return True for a bundled TCX real-time ride-data packet."""
+    return len(data) >= 3 and data[:2] == REALTIME_PREFIX
 
 
 def parse_nak_packet(data: bytes | bytearray) -> tuple[int, int]:

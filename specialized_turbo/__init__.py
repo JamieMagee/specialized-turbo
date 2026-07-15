@@ -28,6 +28,11 @@ from .protocol import (
     CHAR_REQUEST_READ as CHAR_REQUEST_READ,
     CHAR_REQUEST_WRITE as CHAR_REQUEST_WRITE,
     CHAR_WRITE as CHAR_WRITE,
+    CHAR_REQUEST_NOTIFY as CHAR_REQUEST_NOTIFY,
+    CHAR_COMMAND_NOTIFY as CHAR_COMMAND_NOTIFY,
+    CHAR_COMMAND_WRITE as CHAR_COMMAND_WRITE,
+    CHAR_DATA_NOTIFY as CHAR_DATA_NOTIFY,
+    CHAR_DATA_WRITE as CHAR_DATA_WRITE,
     # TCU1 UUIDs
     SERVICE_DATA_NOTIFY_TCU1 as SERVICE_DATA_NOTIFY_TCU1,
     SERVICE_DATA_REQUEST_TCU1 as SERVICE_DATA_REQUEST_TCU1,
@@ -38,11 +43,14 @@ from .protocol import (
     CHAR_WRITE_TCU1 as CHAR_WRITE_TCU1,
     # Generation-aware UUID helpers
     BLEProfile as BLEProfile,
+    BLEServiceID as BLEServiceID,
+    BLEServiceCharacteristics as BLEServiceCharacteristics,
     get_uuid as get_uuid,
     get_char_notify as get_char_notify,
     get_char_request_read as get_char_request_read,
     get_char_request_write as get_char_request_write,
     get_char_write as get_char_write,
+    get_service_characteristics as get_service_characteristics,
     detect_generation as detect_generation,
     # Enums
     Sender as Sender,
@@ -87,9 +95,11 @@ from .framing import (
     unpack_tcx as unpack_tcx,
     is_framed_packet as is_framed_packet,
     is_nak_packet as is_nak_packet,
+    is_realtime_packet as is_realtime_packet,
     parse_nak_packet as parse_nak_packet,
     strip_clear_prefix as strip_clear_prefix,
     NAK_PREFIX as NAK_PREFIX,
+    REALTIME_PREFIX as REALTIME_PREFIX,
 )
 from .parameters import (
     BikeParameter as BikeParameter,
@@ -109,6 +119,11 @@ from .session import (
     ProtocolSession as ProtocolSession,
     TCU1Session as TCU1Session,
     TCXSession as TCXSession,
+)
+from .transport import (
+    BLETraceEvent as BLETraceEvent,
+    TCXNotificationTransport as TCXNotificationTransport,
+    TCXRequestTimeoutError as TCXRequestTimeoutError,
 )
 from .protocol import (
     parse_tcx_message as parse_tcx_message,
@@ -132,6 +147,11 @@ __all__ = [
     "CHAR_REQUEST_READ",
     "CHAR_REQUEST_WRITE",
     "CHAR_WRITE",
+    "CHAR_REQUEST_NOTIFY",
+    "CHAR_COMMAND_NOTIFY",
+    "CHAR_COMMAND_WRITE",
+    "CHAR_DATA_NOTIFY",
+    "CHAR_DATA_WRITE",
     # Protocol — TCU1 UUIDs
     "SERVICE_DATA_NOTIFY_TCU1",
     "SERVICE_DATA_REQUEST_TCU1",
@@ -142,11 +162,14 @@ __all__ = [
     "CHAR_WRITE_TCU1",
     # Protocol — generation-aware helpers
     "BLEProfile",
+    "BLEServiceID",
+    "BLEServiceCharacteristics",
     "get_uuid",
     "get_char_notify",
     "get_char_request_read",
     "get_char_request_write",
     "get_char_write",
+    "get_service_characteristics",
     "detect_generation",
     # Enums
     "Sender",
@@ -187,9 +210,11 @@ __all__ = [
     "unpack_tcx",
     "is_framed_packet",
     "is_nak_packet",
+    "is_realtime_packet",
     "parse_nak_packet",
     "strip_clear_prefix",
     "NAK_PREFIX",
+    "REALTIME_PREFIX",
     # Parameters (TCX2+)
     "BikeParameter",
     "TCXFieldDefinition",
@@ -209,6 +234,10 @@ __all__ = [
     "ProtocolSession",
     "TCU1Session",
     "TCXSession",
+    # TCX notification transport
+    "BLETraceEvent",
+    "TCXNotificationTransport",
+    "TCXRequestTimeoutError",
     # Coordinator helpers
     "TCX_POLL_PARAMS",
     "parse_notification",
@@ -217,4 +246,4 @@ __all__ = [
     "identify_tcx",
 ]
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"

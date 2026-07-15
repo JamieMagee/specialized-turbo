@@ -13,9 +13,10 @@ framing.py      CRC-16/CCITT-FALSE framing for TCX2+ 20-byte packets
 encryption.py   AES-128-CTR encryption/decryption and key derivation for TCX2+
 session.py      ProtocolSession ABC with TCU1Session (passthrough) and TCXSession (CRC + encryption)
 models.py       Mutable dataclass state containers (BatteryState, MotorState, BikeSettings, TelemetrySnapshot)
-connection.py   BLE transport via bleak: connect, pair, subscribe, request-read, write commands
+transport.py    TCX write-without-response + notification correlation and raw packet tracing
+connection.py   BLE lifecycle: connect, pair, identify, subscribe, query, write commands
 telemetry.py    High-level TelemetryMonitor wiring notifications into a TelemetrySnapshot
-cli.py          CLI: scan, telemetry, read, write, services
+cli.py          CLI: scan, telemetry, read, write, services, capture
 ```
 
 Data flow: BLE bytes -> `session.unpack()` -> `parse_message()` -> `ParsedMessage` -> `TelemetrySnapshot.update_from_message()` -> sub-model `update()`.
@@ -73,4 +74,4 @@ Tests in `tests/`, organized as classes. Self-contained (no conftest). Use `pyte
 
 ## CLI
 
-Entry point: `specialized-turbo` -> `specialized_turbo.cli:main`. Subcommands: `scan`, `telemetry`, `read`, `write`, `services`. `_FIELD_NAME_MAP` maps field names to `(sender, channel)` for read. `_WRITABLE_FIELD_MAP` for write.
+Entry point: `specialized-turbo` -> `specialized_turbo.cli:main`. Subcommands: `scan`, `telemetry`, `read`, `write`, `services`, `capture`. `_FIELD_NAME_MAP` maps field names to `(sender, channel)` for read. `_WRITABLE_FIELD_MAP` for write.

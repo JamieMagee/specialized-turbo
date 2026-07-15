@@ -43,6 +43,9 @@ Documentation = "https://github.com/JamieMagee/specialized-turbo/blob/main/docs/
 [tool.hatch.version]
 path = "specialized_turbo/__init__.py"
 
+[tool.hatch.build.targets.sdist]
+exclude = ["/*.xapk"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

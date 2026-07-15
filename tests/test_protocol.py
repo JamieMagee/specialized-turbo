@@ -13,6 +13,7 @@ from specialized_turbo.protocol import (
     MotorChannel,
     BikeSettingsChannel,
     BLEProfile,
+    BLEServiceID,
     Sender,
     _uuid,
     _uuid_tcu1,
@@ -20,6 +21,7 @@ from specialized_turbo.protocol import (
     build_request,
     detect_generation,
     get_char_notify,
+    get_service_characteristics,
     get_field_def,
     get_uuid,
     is_specialized_advertisement,
@@ -73,6 +75,26 @@ class TestUUIDs:
 
     def test_char_write_uuid(self):
         assert CHAR_WRITE == "00000012-3731-3032-494d-484f42525554"
+
+    @pytest.mark.parametrize(
+        ("service_id", "service", "notify", "write"),
+        [
+            (BLEServiceID.REQUEST, 0x0001, 0x0011, 0x0021),
+            (BLEServiceID.COMMAND, 0x0002, 0x0012, 0x0022),
+            (BLEServiceID.DATA, 0x0003, 0x0013, 0x0023),
+        ],
+    )
+    def test_tcx_service_characteristic_pairs(
+        self,
+        service_id,
+        service,
+        notify,
+        write,
+    ):
+        chars = get_service_characteristics(BLEProfile.TCX, service_id)
+        assert chars.service == _uuid(service)
+        assert chars.notify == _uuid(notify)
+        assert chars.write == _uuid(write)
 
     def test_uuid_base_contains_turbohmi(self):
         """Last 12 bytes of UUID base decode to TURBOHMI2017 reversed."""

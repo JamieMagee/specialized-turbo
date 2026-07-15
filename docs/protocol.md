@@ -11,10 +11,10 @@ There are four protocol generations in the wild. They all use the same BLE GATT 
 | TCX3 | `ProtocolSessionTCX3` | Same wire format as TCX2, different parameter set |
 | TCX4 | `ProtocolSessionTCX4` | Same wire format as TCX2/TCX3, different parameter set |
 
-Three communication patterns exist across all generations:
+Three communication patterns exist:
 
 1. **Notifications** -- the bike pushes telemetry as values change
-2. **Request-read** -- the client asks for a specific value
+2. **Queries** -- TCU1 uses request-read; TCX uses write-without-response + notify
 3. **Write** -- the client changes settings (assist level, etc.)
 
 ---
@@ -81,17 +81,15 @@ The trailing bytes decode to `GIGATRONIK` reversed (`KINORTAGIG`).
 
 ### Services and characteristics
 
-| Purpose | Short ID | Properties |
-| --- | --- | --- |
-| Notification data (service) | `0x0003` | |
-| Telemetry notifications | `0x0013` | READ, NOTIFY |
-| DFU / ride log writes | `0x0023` | WRITE_WITHOUT_RESPONSE |
-| Request/query (service) | `0x0001` | |
-| Write request query | `0x0021` | WRITE |
-| Read query response | `0x0011` | READ |
-| Write/commands (service) | `0x0002` | |
-| Send commands | `0x0012` | WRITE |
-| DFU / ride log writes | `0x0022` | WRITE_WITHOUT_RESPONSE |
+Each service has a READ/NOTIFY characteristic (`0x001S`) and a
+WRITE_WITHOUT_RESPONSE characteristic (`0x002S`), where `S` is the service ID.
+TCX never performs a GATT read during normal operation.
+
+| Service | Purpose | Notify | Write without response |
+| --- | --- | --- | --- |
+| `0x0001` | Identification and parameter queries | `0x0011` | `0x0021` |
+| `0x0002` | Ride logs and multi-packet commands | `0x0012` | `0x0022` |
+| `0x0003` | Parameter writes and real-time data | `0x0013` | `0x0023` |
 
 Expand short IDs with the appropriate UUID base. For example, characteristic `0x0013` on a TCX2 bike is `00000013-3731-3032-494d-484f42525554`.
 
@@ -249,7 +247,7 @@ Verifying: `crc_hqx(bytes.fromhex("f8ff000c0500000000000000000000000000"), 0xFFF
 
 ## AES-128-CTR encryption
 
-Some TCX2+ bikes encrypt notifications and request-read responses with AES-128-CTR. The encryption key is exchanged during the identification handshake.
+Some TCX2+ bikes encrypt notifications and query responses with AES-128-CTR. The encryption key is exchanged during the identification handshake.
 
 ### Encrypted packet layout
 
@@ -310,7 +308,10 @@ def derive_key(base64_key: str) -> bytes:
 
 ## Identification handshake
 
-Before streaming telemetry, TCX2+ bikes require a multi-step identification sequence. Each step reads a specific `BikeParameter` by writing its 2-byte big-endian ID to the request-write characteristic and reading the response.
+Before streaming telemetry, TCX2+ bikes require a multi-step identification
+sequence. Each step CRC-frames a 2-byte big-endian `BikeParameter` ID, writes
+the 20-byte frame without response to service 1 characteristic `0x0021`, and
+awaits the matching notification on `0x0011`.
 
 ### Full identification steps (new bike)
 
@@ -437,26 +438,50 @@ The full set of 352 `BikeParameter` IDs is defined in `parameters.py`. Most are 
 
 ## Communication patterns
 
-### Notifications
+### TCX notifications and queries
 
-1. Subscribe to notifications on characteristic `0x0013` (service `0x0003`)
-2. The bike sends messages when values change
-3. On TCU1: parse with `[sender][channel][data]` format
-4. On TCX2+: decrypt if needed, validate CRC, parse with `[param_id][data]` format
+1. Subscribe to service 1 notifications (`0x0011`) before identification.
+2. For each identification or read request:
+   - Build `[param_id_hi, param_id_lo]`.
+   - Zero-pad and append CRC-16 to make a 20-byte frame.
+   - Encrypt the frame if the session negotiated AES-CTR.
+   - Write it without response to service 1 characteristic `0x0021`.
+   - Await the notification on `0x0011` whose parameter ID matches the request.
+3. After identification, subscribe to service 3 (`0x0013`) and service 2
+   (`0x0012`) notifications.
+4. Start live telemetry by writing
+   `SYSTEM_REAL_TIME_DATA_ENB` (`0x015A`) with value `0x01` to service 3:
 
-### Request-read
+   ```
+   01 5a 01 [zero padding] [crc16_le]
+   ```
 
-1. Write 2 bytes to characteristic `0x0021` (service `0x0001`)
-   - TCU1: `[sender, channel]`
-   - TCX2+: `[param_id_hi, param_id_lo]` (big-endian)
-2. Read the response from characteristic `0x0011`
-3. Verify the first 2 bytes match your request
+   Write `0x00` to stop the stream.
 
-The Sepp62 reference code unsubscribes from notifications before doing request-reads since they can interfere on the same connection.
+Real-time ride data uses a separate multi-packet command family beginning
+`f8 f4`. Each 20-byte BLE packet is decrypted and CRC-checked before
+reassembly. The final packet has `0xff` in byte 2, and the reassembled data
+contains parameter records whose values use the normal `BikeParameter`
+metadata. The exact firmware-dependent record set and packet payload offset
+still need confirmation from an untruncated live capture.
+
+The official Android app performs no GATT reads for TCX. A GATT read produces
+an `f8 ff` NAK response on affected bikes.
+
+### TCU1 request-read
+
+1. Write `[sender, channel]` to characteristic `0x0021` (service `0x0001`).
+2. Read the response from characteristic `0x0011`.
+3. Verify the response starts with the requested sender and channel.
+
+The Sepp62 reference code unsubscribes from notifications before doing TCU1
+request-reads since they can interfere on the same connection.
 
 ### Write commands (TCU1)
 
-Write command bytes to characteristic `0x0012` (service `0x0002`). These are documented for TCU1; TCX2+ write commands use the parameter ID system but the format is otherwise similar.
+Write command bytes using the TCU1 command endpoint. TCX2+ parameter writes
+use service 3 characteristic `0x0023`, write-without-response, and the same
+CRC/encryption pipeline as queries.
 
 Set assist level:
 
@@ -500,7 +525,7 @@ value: 0-100
 
 1. **Message `0x02 0x27`**: undocumented, but when it arrives on TCU1, notifications pause briefly. The Sepp62 reference uses this window to sneak in a request-read for battery capacity.
 
-2. **Request-read interference**: on TCU1, do request-reads while notifications are paused to avoid garbled responses.
+2. **Request-read interference**: on TCU1, do request-reads while notifications are paused to avoid garbled responses. TCX does not use GATT reads.
 
 3. **TCU1 voltage/current formulas**: the conversions (`raw/5+20` for voltage, `raw/5` for current) are noted as approximate in the Sepp62 source. TCX2+ uses millivolt/milliamp values directly, which avoids this ambiguity.
 

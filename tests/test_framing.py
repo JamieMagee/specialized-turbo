@@ -10,9 +10,11 @@ from specialized_turbo.framing import (
     FRAMED_PACKET_SIZE,
     FRAMED_PAYLOAD_SIZE,
     NAK_PREFIX,
+    REALTIME_PREFIX,
     compute_crc16_ccitt,
     is_framed_packet,
     is_nak_packet,
+    is_realtime_packet,
     pack_tcx,
     parse_nak_packet,
     strip_clear_prefix,
@@ -157,6 +159,20 @@ class TestIsNakPacket:
 
     def test_nak_prefix_constant(self):
         assert NAK_PREFIX == b"\xf8\xff"
+
+
+class TestIsRealtimePacket:
+    def test_realtime_prefix(self):
+        assert is_realtime_packet(bytes.fromhex("f8f4ff0102")) is True
+
+    def test_non_realtime_packet(self):
+        assert is_realtime_packet(bytes.fromhex("001a31")) is False
+
+    def test_short_packet(self):
+        assert is_realtime_packet(b"\xf8\xf4") is False
+
+    def test_realtime_prefix_constant(self):
+        assert REALTIME_PREFIX == b"\xf8\xf4"
 
 
 class TestParseNakPacket:
