@@ -25,13 +25,20 @@ from typing import cast
 import pytest
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
+import specialized_turbo.telemetry as telemetry_module
+from specialized_turbo.bike_info import BikeInfo
 from specialized_turbo.connection import SpecializedConnection
 from specialized_turbo.coordinator_helpers import TCX_POLL_PARAMS
 from specialized_turbo.identification import WireMessage
+from specialized_turbo.keystore.models import BikeEncryptionKey
 from specialized_turbo.parameters import BikeParameter, encode_parameter_id
-from specialized_turbo.protocol import BatteryChannel, ParsedMessage, Sender
+from specialized_turbo.protocol import BatteryChannel, BLEProfile, ParsedMessage, Sender
 from specialized_turbo.session import ProtocolSession, TCU1Session, TCXSession
-from specialized_turbo.telemetry import RevisionAwareConnection, TelemetryMonitor
+from specialized_turbo.telemetry import (
+    RevisionAwareConnection,
+    TelemetryMonitor,
+    run_telemetry_session,
+)
 from specialized_turbo.transport import NotificationCallback, TCXRequestTimeoutError
 from specialized_turbo.wire_profiles import (
     ProtocolRevision,
@@ -340,3 +347,100 @@ class TestTcu1Unchanged:
 
         assert monitor.snapshot.battery.charge_pct == 55
         await monitor.stop()
+
+
+# ---------------------------------------------------------------------------
+# run_telemetry_session forwards generation / bike_info / key to the connection
+# ---------------------------------------------------------------------------
+
+
+class _RecordingConnection:
+    """Fake SpecializedConnection that records its constructor kwargs."""
+
+    captured: dict[str, object] = {}
+
+    def __init__(
+        self,
+        address: str,
+        *,
+        pin: str | None = None,
+        generation: BLEProfile = BLEProfile.TCX,
+        bike_info: BikeInfo | None = None,
+        key: BikeEncryptionKey | None = None,
+    ) -> None:
+        type(self).captured = {
+            "address": address,
+            "pin": pin,
+            "generation": generation,
+            "bike_info": bike_info,
+            "key": key,
+        }
+        self._session: ProtocolSession = (
+            TCU1Session() if generation == BLEProfile.TCU1 else TCXSession()
+        )
+
+    @property
+    def session(self) -> ProtocolSession:
+        return self._session
+
+    async def __aenter__(self) -> _RecordingConnection:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def subscribe_notifications(self, callback: NotificationCallback) -> None:
+        return None
+
+    async def unsubscribe_notifications(self) -> None:
+        return None
+
+
+class TestRunTelemetrySessionForwarding:
+    async def test_forwards_tcu1_kwargs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            telemetry_module, "SpecializedConnection", _RecordingConnection
+        )
+
+        await run_telemetry_session(
+            "AA:BB:CC:DD:EE:FF",
+            pin="946166",
+            generation=BLEProfile.TCU1,
+            duration=0.001,
+            output_callback=lambda _s: None,
+        )
+
+        assert _RecordingConnection.captured == {
+            "address": "AA:BB:CC:DD:EE:FF",
+            "pin": "946166",
+            "generation": BLEProfile.TCU1,
+            "bike_info": None,
+            "key": None,
+        }
+
+    async def test_forwards_tcx_bike_info_and_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            telemetry_module, "SpecializedConnection", _RecordingConnection
+        )
+        info = BikeInfo(
+            name="SPECIALIZED", bike_name="LEVO2", is_bike=True, complete=True
+        )
+        key = BikeEncryptionKey(raw=KEY_RAW)
+
+        await run_telemetry_session(
+            "AA:BB:CC:DD:EE:FF",
+            pin="946166",
+            generation=BLEProfile.TCX,
+            bike_info=info,
+            key=key,
+            duration=0.001,
+            output_callback=lambda _s: None,
+        )
+
+        captured = _RecordingConnection.captured
+        assert captured["generation"] == BLEProfile.TCX
+        assert captured["bike_info"] is info
+        assert captured["key"] is key
+        assert captured["pin"] == "946166"

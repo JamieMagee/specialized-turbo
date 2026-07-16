@@ -275,6 +275,53 @@ class TestFullHandshake:
         assert ident.session.encrypted
         assert transport.session is ident.session
 
+    async def test_public_identify_installs_revision_for_immediate_transport_use(self):
+        """identify() installs the revision so the transport is usable at once.
+
+        An external client (e.g. Home Assistant) that drives the transport
+        directly -- without a ``SpecializedConnection`` -- must be able to
+        call request_bike_parameter/write_bike_parameter/set_realtime_enabled
+        immediately after identify() returns, i.e. the negotiated
+        ProtocolRevision is installed on the transport alongside the session.
+        """
+        client = _FakeClient()
+        bike = _healthy_bike(client)
+        bike.set_body(_wire(BikeParameter.BATTERY1_STATE_OF_CHARGE), bytes([49]))
+        transport = _transport(client)
+
+        result = await identify(
+            transport, _complete_bike_info(), BikeEncryptionKey(raw=KEY_RAW)
+        )
+
+        # Revision installed on the transport as part of identification.
+        assert transport.protocol_revision == result.protocol_revision
+        assert transport.protocol_revision == ProtocolRevision(GENERATION, REVISION)
+
+        data_write = get_service_characteristics(
+            BLEProfile.TCX, BLEServiceID.DATA
+        ).write
+
+        # A read resolves the BikeParameter to its real wire id (0x0500).
+        raw = await transport.request_bike_parameter(
+            BikeParameter.BATTERY1_STATE_OF_CHARGE
+        )
+        assert bike.requests[-1] == 0x0500
+        assert parse_wire_message(raw, GENERATION, REVISION).value == 49
+
+        # A write resolves MOTOR_ACTIVE_TRAVEL_MODE to wire 0x07fa on service 3.
+        await transport.write_bike_parameter(
+            BikeParameter.MOTOR_ACTIVE_TRAVEL_MODE, bytes([2])
+        )
+        write_char, write_packet = client.writes[-1]
+        assert write_char == data_write
+        assert transport.session.unpack(write_packet)[:3] == bytes([0x07, 0xFA, 0x02])
+
+        # set_realtime_enabled resolves SYSTEM_REAL_TIME_DATA_ENB to 0x080f.
+        await transport.set_realtime_enabled(True)
+        enable_char, enable_packet = client.writes[-1]
+        assert enable_char == data_write
+        assert transport.session.unpack(enable_packet)[:3] == bytes.fromhex("080f01")
+
 
 # ---------------------------------------------------------------------------
 # IV installation + revision selection (requirement 6)

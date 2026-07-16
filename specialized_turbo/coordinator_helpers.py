@@ -301,10 +301,12 @@ async def identify_tcx(
        New code should use :class:`specialized_turbo.identification.TCXIdentification`
        (or the :func:`specialized_turbo.identification.identify` convenience
        wrapper), which fetches the real key from the account keystore and
-       negotiates generation/revision-correct wire ids.  This function is
-       kept only so existing callers (e.g. :class:`SpecializedConnection`)
-       keep importing and calling it; it now always returns an unencrypted
-       :class:`TCXSession`.
+       negotiates generation/revision-correct wire ids.
+       :class:`~specialized_turbo.connection.SpecializedConnection` no longer
+       calls this shim -- it drives ``TCXIdentification`` directly.  This
+       function is retained only for backward compatibility with any
+       out-of-tree callers still importing it; it now always returns an
+       unencrypted :class:`TCXSession`.
     """
     steps = [
         BikeParameter.SYSTEM_GET_NEW_VI,

@@ -262,7 +262,9 @@ class SpecializedConnection:
             try:
                 result = await identification.run()
                 self._session = transport.session
-                transport.protocol_revision = result.protocol_revision
+                # identification.run() already installs the negotiated
+                # revision on the transport; keep only the connection's own
+                # active revision here.
                 self._protocol_revision = result.protocol_revision
                 self._identification_result = result
                 await transport.subscribe_for_realtime()

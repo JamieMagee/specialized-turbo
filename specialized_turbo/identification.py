@@ -350,6 +350,17 @@ class TCXIdentification:
     async def run(self) -> IdentificationResult:
         """Execute the full handshake and return an :class:`IdentificationResult`.
 
+        On success the negotiated encrypted :class:`~specialized_turbo.session.
+        TCXSession` **and** the negotiated
+        :class:`~specialized_turbo.wire_profiles.ProtocolRevision` are both
+        installed on the transport before returning, so a caller driving the
+        transport directly (e.g. a Home Assistant client that uses
+        :func:`identify` rather than :class:`~specialized_turbo.connection.
+        SpecializedConnection`) can immediately call
+        :meth:`~specialized_turbo.transport.TCXNotificationTransport.
+        request_bike_parameter` / ``write_bike_parameter`` /
+        ``set_realtime_enabled`` without any further wiring.
+
         Raises a subclass of :class:`IdentificationError` on protocol
         failures, or :class:`~specialized_turbo.transport.
         TCXTransportDisconnectedError` if the link drops mid-handshake.  On
@@ -373,6 +384,10 @@ class TCXIdentification:
             raise
         self._phase = IdentificationPhase.COMPLETE
         self._result = result
+        # Install the negotiated revision on the transport alongside the
+        # session so BikeParameter -> wire id resolution works immediately,
+        # even without a SpecializedConnection.
+        self._transport.protocol_revision = result.protocol_revision
         return result
 
     # -- preconditions ----------------------------------------------------
@@ -555,8 +570,11 @@ async def identify(
 ) -> IdentificationResult:
     """Convenience wrapper: run :class:`TCXIdentification` once.
 
-    The negotiated encrypted session is installed on *transport*; the return
-    value is the structured identification result.  For access to the session
-    or intermediate phase, construct :class:`TCXIdentification` directly.
+    The negotiated encrypted session **and** protocol revision are installed
+    on *transport* before returning, so ``transport.request_bike_parameter``/
+    ``write_bike_parameter``/``set_realtime_enabled`` work immediately; the
+    return value is the structured identification result.  For access to the
+    session or intermediate phase, construct :class:`TCXIdentification`
+    directly.
     """
     return await TCXIdentification(transport, bike_info, key, timeout=timeout).run()

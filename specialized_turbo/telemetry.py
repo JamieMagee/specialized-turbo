@@ -15,11 +15,13 @@ from typing import Protocol, runtime_checkable
 
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
+from .bike_info import BikeInfo
 from .connection import SpecializedConnection
 from .coordinator_helpers import TCX_POLL_PARAMS, parse_tcx_wire_payload
 from .framing import is_realtime_packet
+from .keystore.models import BikeEncryptionKey
 from .models import TelemetrySnapshot
-from .protocol import parse_message, parse_tcx_message, ParsedMessage
+from .protocol import BLEProfile, parse_message, parse_tcx_message, ParsedMessage
 from .session import TCXSession
 from .transport import TCXRequestTimeoutError
 from .wire_profiles import ProtocolRevision, UnmappedParameterError
@@ -302,6 +304,9 @@ async def run_telemetry_session(
     address: str,
     *,
     pin: str | None = None,
+    generation: BLEProfile = BLEProfile.TCX,
+    bike_info: BikeInfo | None = None,
+    key: BikeEncryptionKey | None = None,
     duration: float = 0,
     output_format: str = "table",
     output_callback: Callable[[str], None] | None = None,
@@ -310,10 +315,32 @@ async def run_telemetry_session(
     Connect, print telemetry for a while, and return the final snapshot.
 
     Set duration=0 to run until Ctrl+C. output_format is "table" or "json".
+
+    *generation*, *bike_info*, and *key* are forwarded to
+    :class:`SpecializedConnection`. A TCX2+ bike needs the parsed
+    advertisement (*bike_info*) and its AES key (*key*) so the identification
+    handshake can run; a TCU1 bike needs neither -- pass
+    ``generation=BLEProfile.TCU1``. Example::
+
+        # TCX2+ (identified) session
+        await run_telemetry_session(
+            "DC:DD:BB:4A:D6:55", pin="946166", bike_info=info, key=key
+        )
+
+        # TCU1 session
+        await run_telemetry_session(
+            "DC:DD:BB:4A:D6:55", pin="946166", generation=BLEProfile.TCU1
+        )
     """
     printer = output_callback or print
 
-    async with SpecializedConnection(address, pin=pin) as conn:
+    async with SpecializedConnection(
+        address,
+        pin=pin,
+        generation=generation,
+        bike_info=bike_info,
+        key=key,
+    ) as conn:
         monitor = TelemetryMonitor(conn)
 
         def _on_update(msg: ParsedMessage, snap: TelemetrySnapshot) -> None:
