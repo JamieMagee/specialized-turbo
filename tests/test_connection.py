@@ -12,6 +12,7 @@ would.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import warnings
 from collections.abc import Callable
@@ -20,9 +21,10 @@ from typing import Any, cast
 
 import pytest
 from bleak.backends.characteristic import BleakGATTCharacteristic
+from bleak.backends.scanner import AdvertisementData
 
 import specialized_turbo.connection as connection_module
-from specialized_turbo.bike_info import BikeInfo
+from specialized_turbo.bike_info import BikeInfo, parse_bike_info
 from specialized_turbo.connection import (
     SpecializedConnection,
     UnsupportedTCXOperationError,
@@ -874,3 +876,402 @@ async def test_no_secret_key_material_in_logs_or_errors(
         await bad_connection.connect()
     assert KEY_RAW.hex() not in str(excinfo.value)
     assert WRONG_KEY_RAW.hex() not in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# find_advertisement_by_address
+# ---------------------------------------------------------------------------
+
+
+def _adv(
+    manufacturer_data: dict[int, bytes] | None = None,
+    *,
+    local_name: str | None = None,
+    service_data: dict[str, bytes] | None = None,
+    service_uuids: list[str] | None = None,
+    tx_power: int | None = None,
+    rssi: int = -60,
+    platform_data: tuple[Any, ...] = (),
+) -> AdvertisementData:
+    """Build a real ``bleak`` ``AdvertisementData`` for a test event.
+
+    Using the genuine ``NamedTuple`` (rather than a hand-rolled stand-in)
+    keeps these tests honest about the exact shape
+    ``find_advertisement_by_address``'s merge logic has to handle.
+    """
+    return AdvertisementData(
+        local_name=local_name,
+        manufacturer_data=manufacturer_data or {},
+        service_data=service_data or {},
+        service_uuids=service_uuids or [],
+        tx_power=tx_power,
+        rssi=rssi,
+        platform_data=platform_data,
+    )
+
+
+class _FakeDevice:
+    def __init__(self, address: str, name: str | None = None) -> None:
+        self.address = address
+        self.name = name
+
+
+class _FakeScanner:
+    """Stand-in for ``bleak.BleakScanner``.
+
+    Captures the ``detection_callback`` and, on ``start()``, synchronously
+    replays every ``(device, adv)`` pair queued in ``pending`` -- letting
+    tests simulate advertisements without real BLE hardware.
+    """
+
+    #: Set by each test before constructing a connection/calling the function.
+    pending: list[tuple[Any, Any]] = []
+    #: Every instance constructed, for assertions like "was stop() called".
+    instances: list[_FakeScanner] = []
+
+    def __init__(self, detection_callback: Callable[[Any, Any], None] | None = None):
+        self._cb = detection_callback
+        self.stopped = False
+        _FakeScanner.instances.append(self)
+
+    async def start(self) -> None:
+        for device, adv in _FakeScanner.pending:
+            if self._cb is not None:
+                self._cb(device, adv)
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+
+@pytest.fixture(autouse=False)
+def fake_scanner(monkeypatch: pytest.MonkeyPatch) -> type[_FakeScanner]:
+    _FakeScanner.pending = []
+    _FakeScanner.instances = []
+    monkeypatch.setattr(connection_module, "BleakScanner", _FakeScanner)
+    return _FakeScanner
+
+
+@pytest.mark.asyncio
+async def test_find_advertisement_by_address_returns_matching_device_and_adv(
+    fake_scanner: type[_FakeScanner],
+) -> None:
+    device = _FakeDevice("AA:BB:CC:DD:EE:FF", name="SPECIALIZED")
+    adv = _adv({0x0059: b"\x01\x02"})
+    fake_scanner.pending = [(device, adv)]
+
+    result = await connection_module.find_advertisement_by_address(
+        "AA:BB:CC:DD:EE:FF", timeout=0.05
+    )
+
+    assert result is not None
+    found_device, found_adv = result
+    assert found_device is device
+    assert found_adv.manufacturer_data == {0x0059: b"\x01\x02"}
+
+
+@pytest.mark.asyncio
+async def test_find_advertisement_by_address_is_case_insensitive(
+    fake_scanner: type[_FakeScanner],
+) -> None:
+    device = _FakeDevice("aa:bb:cc:dd:ee:ff")
+    adv = _adv({})
+    fake_scanner.pending = [(device, adv)]
+
+    result = await connection_module.find_advertisement_by_address(
+        "AA:BB:CC:DD:EE:FF", timeout=0.05
+    )
+
+    assert result is not None
+    assert result[0] is device
+
+
+@pytest.mark.asyncio
+async def test_find_advertisement_by_address_ignores_other_devices(
+    fake_scanner: type[_FakeScanner],
+) -> None:
+    other = _FakeDevice("11:22:33:44:55:66")
+    fake_scanner.pending = [(other, _adv({}))]
+
+    result = await connection_module.find_advertisement_by_address(
+        "AA:BB:CC:DD:EE:FF", timeout=0.05
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_find_advertisement_by_address_times_out_when_not_seen(
+    fake_scanner: type[_FakeScanner],
+) -> None:
+    fake_scanner.pending = []
+
+    result = await connection_module.find_advertisement_by_address(
+        "AA:BB:CC:DD:EE:FF", timeout=0.05
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_find_advertisement_by_address_stops_scanner(
+    fake_scanner: type[_FakeScanner],
+) -> None:
+    device = _FakeDevice("AA:BB:CC:DD:EE:FF")
+    fake_scanner.pending = [(device, _adv({}))]
+
+    await connection_module.find_advertisement_by_address(
+        "AA:BB:CC:DD:EE:FF", timeout=0.05
+    )
+
+    assert len(_FakeScanner.instances) == 1
+    assert _FakeScanner.instances[0].stopped is True
+
+
+# ---------------------------------------------------------------------------
+# find_advertisement_by_address -- WinRT-style split/multi-event reports
+#
+# Real Windows testers (ha-specialized-turbo#9, comment 4994442091) see
+# Bleak's WinRT backend emit *separate* detection_callback events for the
+# same target address: an initial report carrying only the address (empty
+# name, no manufacturer data), followed later by one with the local name
+# (e.g. "WSBC001057439S") and the Nordic manufacturer bytes. Returning the
+# first (incomplete) event -- as this function used to -- fed
+# parse_bike_info() an empty manufacturer_data dict and it reported no
+# recognized advertisement data even though the bike was seen.
+# ---------------------------------------------------------------------------
+
+#: The real ha-specialized-turbo#9 "Vado 3.0"/2022 bike vector (also used
+#: in tests/test_bike_info.py's TestIssue9RealVector): a complete, 10-byte
+#: Nordic record whose HW version ("B.3.3") is a recognized TCDw2 (TCX2)
+#: category -- so it alone (regardless of name) satisfies both the
+#: is_bike gate and the "complete" Nordic branch.
+_NORDIC_ID = 0x0059
+_APPLE_ID = 0x004C
+_ISSUE9_NAME = "WSBC001057439S"
+_ISSUE9_NORDIC_PAYLOAD = bytes.fromhex("dac8c404423333330601")
+_ISSUE9_APPLE_PAYLOAD = bytes.fromhex("0215545552424f484d4932303137010000005fe033060a")
+
+#: A 10-byte Nordic payload with a deliberately *unrecognized* HW version
+#: ("Z.9.9"), so it does *not* satisfy is_bike on its own -- only combined
+#: with a "SPECIALIZED"-containing name does the merged report become
+#: is_bike/complete. Used to prove completeness genuinely depends on
+#: merging both the name and manufacturer-data events, in either order.
+_UNRECOGNIZED_HW_NORDIC_PAYLOAD = bytes.fromhex("dac8c4045a3939330601")
+
+
+@pytest.mark.asyncio
+async def test_find_advertisement_by_address_merges_empty_then_named_nordic_report(
+    fake_scanner: type[_FakeScanner],
+) -> None:
+    """WinRT split: empty/address-only report, then name + Nordic record."""
+    address = "D7:15:00:00:00:01"
+    empty_device = _FakeDevice(address, name=None)
+    named_device = _FakeDevice(address, name=_ISSUE9_NAME)
+    fake_scanner.pending = [
+        (empty_device, _adv({})),
+        (named_device, _adv({_NORDIC_ID: _ISSUE9_NORDIC_PAYLOAD})),
+    ]
+
+    result = await connection_module.find_advertisement_by_address(address, timeout=1.0)
+
+    assert result is not None
+    found_device, found_adv = result
+    assert found_device.name == _ISSUE9_NAME
+    assert found_adv.manufacturer_data == {_NORDIC_ID: _ISSUE9_NORDIC_PAYLOAD}
+
+    info = parse_bike_info(found_device.name or "", found_adv.manufacturer_data)
+    assert info.is_bike is True
+    assert info.complete is True
+    assert info.bike_name == "COMO2 WSBC001057439S"
+
+
+@pytest.mark.asyncio
+async def test_find_advertisement_by_address_merges_name_then_nordic_report(
+    fake_scanner: type[_FakeScanner],
+) -> None:
+    """Name-only event, then Nordic-only event (unrecognized HW) -- name first."""
+    address = "D7:15:00:00:00:01"
+    named_device = _FakeDevice(address, name="SPECIALIZED-TEST")
+    unnamed_device = _FakeDevice(address, name=None)
+    fake_scanner.pending = [
+        (named_device, _adv({})),
+        (unnamed_device, _adv({_NORDIC_ID: _UNRECOGNIZED_HW_NORDIC_PAYLOAD})),
+    ]
+
+    result = await connection_module.find_advertisement_by_address(address, timeout=1.0)
+
+    assert result is not None
+    found_device, found_adv = result
+    # The name from the first event must survive the second (nameless) one.
+    assert found_device.name == "SPECIALIZED-TEST"
+    assert found_adv.manufacturer_data == {_NORDIC_ID: _UNRECOGNIZED_HW_NORDIC_PAYLOAD}
+
+    info = parse_bike_info(found_device.name or "", found_adv.manufacturer_data)
+    assert info.is_bike is True
+    assert info.complete is True
+
+
+@pytest.mark.asyncio
+async def test_find_advertisement_by_address_merges_nordic_then_name_report(
+    fake_scanner: type[_FakeScanner],
+) -> None:
+    """Nordic-only event (unrecognized HW), then name-only event -- reverse order."""
+    address = "D7:15:00:00:00:01"
+    unnamed_device = _FakeDevice(address, name=None)
+    named_device = _FakeDevice(address, name="SPECIALIZED-TEST")
+    fake_scanner.pending = [
+        (unnamed_device, _adv({_NORDIC_ID: _UNRECOGNIZED_HW_NORDIC_PAYLOAD})),
+        (named_device, _adv({})),
+    ]
+
+    result = await connection_module.find_advertisement_by_address(address, timeout=1.0)
+
+    assert result is not None
+    found_device, found_adv = result
+    assert found_device.name == "SPECIALIZED-TEST"
+    assert found_adv.manufacturer_data == {_NORDIC_ID: _UNRECOGNIZED_HW_NORDIC_PAYLOAD}
+
+    info = parse_bike_info(found_device.name or "", found_adv.manufacturer_data)
+    assert info.is_bike is True
+    assert info.complete is True
+
+
+@pytest.mark.asyncio
+async def test_find_advertisement_by_address_ignores_unrelated_addresses_interleaved(
+    fake_scanner: type[_FakeScanner],
+) -> None:
+    """Unrelated-address events interleaved with the target must never merge in."""
+    address = "D7:15:00:00:00:01"
+    other = _FakeDevice("11:22:33:44:55:66")
+    empty_device = _FakeDevice(address, name=None)
+    named_device = _FakeDevice(address, name=_ISSUE9_NAME)
+    fake_scanner.pending = [
+        (other, _adv({_NORDIC_ID: _ISSUE9_NORDIC_PAYLOAD})),
+        (empty_device, _adv({})),
+        (other, _adv({0x1234: b"\xff\xff"})),
+        (named_device, _adv({_NORDIC_ID: _ISSUE9_NORDIC_PAYLOAD})),
+        (other, _adv({})),
+    ]
+
+    result = await connection_module.find_advertisement_by_address(address, timeout=1.0)
+
+    assert result is not None
+    found_device, found_adv = result
+    assert found_device.address == address
+    assert found_adv.manufacturer_data == {_NORDIC_ID: _ISSUE9_NORDIC_PAYLOAD}
+
+
+@pytest.mark.asyncio
+async def test_find_advertisement_by_address_apple_only_returns_partial_on_timeout(
+    fake_scanner: type[_FakeScanner],
+) -> None:
+    """Apple-iBeacon-only reports never complete; timeout returns the partial."""
+    address = "D7:15:00:00:00:01"
+    device1 = _FakeDevice(address, name=None)
+    device2 = _FakeDevice(address, name=None)
+    fake_scanner.pending = [
+        (device1, _adv({_APPLE_ID: _ISSUE9_APPLE_PAYLOAD}, rssi=-70)),
+        (device2, _adv({_APPLE_ID: _ISSUE9_APPLE_PAYLOAD}, rssi=-55)),
+    ]
+
+    result = await connection_module.find_advertisement_by_address(
+        address, timeout=0.05
+    )
+
+    assert result is not None
+    found_device, found_adv = result
+    assert found_device.address == address
+    assert found_adv.manufacturer_data == {_APPLE_ID: _ISSUE9_APPLE_PAYLOAD}
+    # Latest RSSI wins even though the report stays incomplete/partial.
+    assert found_adv.rssi == -55
+
+    info = parse_bike_info(found_device.name or "", found_adv.manufacturer_data)
+    assert info.is_bike is False
+    assert info.complete is False
+
+
+@pytest.mark.asyncio
+async def test_find_advertisement_by_address_merges_service_and_manufacturer_data(
+    fake_scanner: type[_FakeScanner],
+) -> None:
+    """Manufacturer/service data merge key-by-key; service UUIDs are unioned."""
+    address = "D7:15:00:00:00:01"
+    device = _FakeDevice(address, name=None)
+    fake_scanner.pending = [
+        (
+            device,
+            _adv(
+                {_NORDIC_ID: b"\x01\x02"},
+                service_data={"uuid1": b"aa"},
+                service_uuids=["0000180d-0000-1000-8000-00805f9b34fb", "shared-uuid"],
+                tx_power=4,
+            ),
+        ),
+        (
+            device,
+            _adv(
+                {_APPLE_ID: b"\x03\x04"},
+                service_data={"uuid2": b"bb"},
+                service_uuids=["shared-uuid", "another-uuid"],
+            ),
+        ),
+    ]
+
+    result = await connection_module.find_advertisement_by_address(
+        address, timeout=0.05
+    )
+
+    assert result is not None
+    _, found_adv = result
+    assert found_adv.manufacturer_data == {
+        _NORDIC_ID: b"\x01\x02",
+        _APPLE_ID: b"\x03\x04",
+    }
+    assert found_adv.service_data == {"uuid1": b"aa", "uuid2": b"bb"}
+    assert found_adv.service_uuids == [
+        "0000180d-0000-1000-8000-00805f9b34fb",
+        "shared-uuid",
+        "another-uuid",
+    ]
+    # tx_power isn't repeated on the second event -- the earlier non-None
+    # value must survive rather than being blanked out.
+    assert found_adv.tx_power == 4
+
+
+@pytest.mark.asyncio
+async def test_find_advertisement_by_address_returns_none_when_no_target_seen(
+    fake_scanner: type[_FakeScanner],
+) -> None:
+    """No event for the target address at all -- still None, never an empty report."""
+    fake_scanner.pending = [
+        (_FakeDevice("11:22:33:44:55:66"), _adv({_NORDIC_ID: _ISSUE9_NORDIC_PAYLOAD})),
+        (_FakeDevice("22:33:44:55:66:77"), _adv({})),
+    ]
+
+    result = await connection_module.find_advertisement_by_address(
+        "D7:15:00:00:00:01", timeout=0.05
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_find_advertisement_by_address_stops_scanner_on_cancellation(
+    fake_scanner: type[_FakeScanner],
+) -> None:
+    """Cancelling the caller's task must still stop the scanner (no leaks)."""
+    fake_scanner.pending = []  # Nothing arrives -- the call blocks until cancelled.
+
+    task = asyncio.create_task(
+        connection_module.find_advertisement_by_address(
+            "D7:15:00:00:00:01", timeout=30.0
+        )
+    )
+    await asyncio.sleep(0)  # Let the task start and call scanner.start().
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert len(_FakeScanner.instances) == 1
+    assert _FakeScanner.instances[0].stopped is True

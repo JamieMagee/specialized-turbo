@@ -10,14 +10,19 @@ Async, built on [bleak](https://github.com/hbldh/bleak). Includes a CLI. Protoco
 pip install specialized-turbo
 ```
 
+Every command (`scan`, `telemetry`, `read`, `write`, `capture`, `services`)
+works out of the box; there are no optional extras.
+
 ## Quick start
 
 > **TCX2+ bikes (Vado/Levo/Creo SL, etc.) require identification.** Pass the
 > parsed advertisement (`bike_info`, from `parse_bike_info`) and the bike's
-> AES key (`key`, a `BikeEncryptionKey` fetched out-of-band from the
-> Specialized account keystore) so the connection can run the encrypted
-> identification handshake and negotiate the protocol revision. TCU1 bikes
-> (2018 Levo) need neither — just the address and PIN.
+> AES key (`key`, a `BikeEncryptionKey`) so the connection can run the
+> encrypted identification handshake and negotiate the protocol revision.
+> This library has no account/login or network key-fetching feature of any
+> kind: the key can never be obtained over BLE, and must be supplied by the
+> caller from an external, authorized source (see *Encryption keys* below).
+> TCU1 bikes (2018 Levo) need neither — just the address and PIN.
 
 ### Stream telemetry (TCX2+)
 
@@ -27,7 +32,8 @@ from specialized_turbo import SpecializedConnection, TelemetryMonitor
 from specialized_turbo import parse_bike_info, BikeEncryptionKey
 
 async def main():
-    # bike_info comes from the BLE advertisement; key from your account.
+    # bike_info comes from the BLE advertisement; key from an external,
+    # authorized source.
     async with SpecializedConnection(
         "DC:DD:BB:4A:D6:55", pin="946166", bike_info=info, key=key
     ) as conn:
@@ -85,43 +91,89 @@ async with SpecializedConnection(
 
 ## CLI
 
-> **CLI TCX2+ support is limited.** The CLI cannot yet fetch a bike's AES key
-> from the Specialized account keystore, so commands that need the encrypted
-> identification handshake (`telemetry`, `capture`, and `read` of a TCX2+
-> field) fail with an explicit message on TCX2+ bikes. `scan`, `services`,
-> `read list`/`write list`, and TCU1 `read`/`write` work today. Use the
-> library API (`SpecializedConnection` with `bike_info=` and `key=`) for
-> TCX2+ telemetry and parameter access.
+Every command that connects to a specific bike (`telemetry`, `read`, `write`,
+`capture`) first resolves the bike's advertisement (`scan`-style, filtered by
+address) into a `BikeInfo`. TCU1 bikes need no key. TCX2+ bikes need their
+AES-128 key, supplied via:
 
-Scan for bikes:
+- `--key-file FILE`: a self-describing, versioned JSON key file (see
+  *Encryption keys* below), validated against the bike's HMI hardware/serial
+  IDs.
+
+There is no inline `--key` flag, no environment variable, and no
+account/login or network key-fetching feature of any kind: this library
+cannot obtain a TCX2+ key for you. The key can never be read over BLE --
+it must come from an external, authorized source and be placed in a key
+file yourself before running any TCX2+ command.
+
+Scan for bikes (prints a safe `BikeInfo` summary -- never any key/credential material):
 
 ```bash
 specialized-turbo scan
 specialized-turbo scan --timeout 15
 ```
 
+### Encryption keys (key-file format)
+
+A key file is a small JSON object, self-describing and bound to one
+specific bike by its HMI hardware/serial IDs:
+
+```json
+{
+  "version": 1,
+  "hmi_hw": "B.4.3",
+  "hmi_sn": "1234",
+  "key": "00112233445566778899aabbccddeeff"
+}
+```
+
+- `version`: format version; currently always `1`.
+- `hmi_hw` / `hmi_sn`: the bike's HMI hardware version and serial number, as
+  reported in its BLE advertisement (see `specialized-turbo scan`). A key
+  file whose `hmi_hw`/`hmi_sn` don't match the resolved bike is refused.
+- `key`: the derived 16-byte AES-128 key, as a 32-character lowercase hex
+  string.
+
+**Sensitivity:** the file contains secret key material -- treat it like a
+credential (restrict its permissions, don't commit it to version control,
+don't share it). Reading a key file is bounded to a small size limit and
+warns on stderr if its permissions are more permissive than `0600` on
+POSIX. On Windows there is no `os`-level equivalent of POSIX file-mode
+bits; restrict access to the file yourself (e.g. via NTFS ACLs) if that
+matters for your threat model -- this library cannot check or enforce
+file permissions on Windows.
+
+**Acquiring a key:** this library has no built-in, normal-user way to
+acquire a TCX2+ bike's key -- there is no account/login flow, and the key
+is never available over BLE. You must obtain the key yourself from an
+external, authorized source and write the key file above by hand (or with
+your own tooling) before using `--key-file`.
+
 Stream telemetry:
 
 ```bash
+specialized-turbo telemetry DC:DD:BB:4A:D6:55 --pin 946166 --key-file vado.key.json
+specialized-turbo telemetry DC:DD:BB:4A:D6:55 --pin 946166 --key-file vado.key.json --format json
+specialized-turbo telemetry DC:DD:BB:4A:D6:55 --pin 946166 --key-file vado.key.json --duration 30
+
+# TCU1 (2018 Levo) bikes need no key at all:
 specialized-turbo telemetry DC:DD:BB:4A:D6:55 --pin 946166
-specialized-turbo telemetry DC:DD:BB:4A:D6:55 --pin 946166 --format json
-specialized-turbo telemetry DC:DD:BB:4A:D6:55 --pin 946166 --duration 30
 ```
 
 Read a single value:
 
 ```bash
 specialized-turbo read list                                             # show available fields
-specialized-turbo read battery_charge_percent DC:DD:BB:4A:D6:55 --pin 946166
-specialized-turbo read speed DC:DD:BB:4A:D6:55 --pin 946166 --format json
+specialized-turbo read battery_charge_percent DC:DD:BB:4A:D6:55 --pin 946166           # TCU1
+specialized-turbo read speed DC:DD:BB:4A:D6:55 --pin 946166 --key-file vado.key.json   # TCX2+
 ```
 
 Write a value:
 
 ```bash
 specialized-turbo write list                                            # show writable fields
-specialized-turbo write assist_level 2 DC:DD:BB:4A:D6:55 --pin 946166  # set to TRAIL
-specialized-turbo write acceleration 50 DC:DD:BB:4A:D6:55 --pin 946166 # 50% sensitivity
+specialized-turbo write assist_level 2 DC:DD:BB:4A:D6:55 --pin 946166  # TCU1: set to TRAIL
+specialized-turbo write assist_level 2 DC:DD:BB:4A:D6:55 --pin 946166 --key-file vado.key.json  # TCX2+
 ```
 
 Dump GATT services (debugging):
@@ -133,7 +185,7 @@ specialized-turbo services DC:DD:BB:4A:D6:55 --pin 946166
 Capture complete TCX writes and notifications for protocol debugging:
 
 ```bash
-specialized-turbo capture DC:DD:BB:4A:D6:55 --duration 60 > tcx-capture.tsv
+specialized-turbo capture DC:DD:BB:4A:D6:55 --duration 60 --key-file vado.key.json > tcx-capture.tsv
 ```
 
 ## Available fields

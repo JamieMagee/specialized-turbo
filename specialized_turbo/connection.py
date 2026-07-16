@@ -16,7 +16,7 @@ from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
-from .bike_info import BikeInfo
+from .bike_info import BikeInfo, parse_bike_info
 from .identification import (
     IdentificationResult,
     TCXIdentification,
@@ -104,6 +104,111 @@ async def find_bike_by_address(
     return device
 
 
+def _merge_advertisement_data(
+    merged: AdvertisementData | None, adv: AdvertisementData
+) -> AdvertisementData:
+    """Fold a new ``AdvertisementData`` event into the running merged report.
+
+    Manufacturer/service data are merged key-by-key (a later event's bytes
+    for a given company/service id win), service UUIDs are unioned, and
+    the local name/tx power are taken from the latest event that actually
+    carries a non-``None`` value (an event with no name/tx power must not
+    blank out one already seen). RSSI and platform data are always taken
+    from the latest event -- there is no "missing" sentinel for either.
+    """
+    if merged is None:
+        return AdvertisementData(
+            local_name=adv.local_name,
+            manufacturer_data=dict(adv.manufacturer_data),
+            service_data=dict(adv.service_data),
+            service_uuids=list(dict.fromkeys(adv.service_uuids)),
+            tx_power=adv.tx_power,
+            rssi=adv.rssi,
+            platform_data=adv.platform_data,
+        )
+    return AdvertisementData(
+        local_name=adv.local_name if adv.local_name is not None else merged.local_name,
+        manufacturer_data={**merged.manufacturer_data, **adv.manufacturer_data},
+        service_data={**merged.service_data, **adv.service_data},
+        service_uuids=list(dict.fromkeys([*merged.service_uuids, *adv.service_uuids])),
+        tx_power=adv.tx_power if adv.tx_power is not None else merged.tx_power,
+        rssi=adv.rssi,
+        platform_data=adv.platform_data,
+    )
+
+
+async def find_advertisement_by_address(
+    address: str,
+    timeout: float = 10.0,
+) -> tuple[BLEDevice, AdvertisementData] | None:
+    """Scan for a specific device by MAC address, preserving its ``AdvertisementData``.
+
+    Unlike :func:`find_bike_by_address` (which wraps ``BleakScanner.
+    find_device_by_address`` and only returns a ``BLEDevice``), this keeps
+    the matching advertisement's manufacturer data so callers can parse it
+    into a :class:`~specialized_turbo.bike_info.BikeInfo` (e.g. to resolve
+    the HMI hardware/serial IDs needed to identify a TCX2+ bike or bind an
+    encryption key) without a second, separate scan.
+
+    Some backends -- WinRT in particular (see `issue #9
+    <https://github.com/JamieMagee/specialized-turbo/issues/9>`_) -- split a
+    single physical advertisement into several separate
+    ``detection_callback`` events for the *same* address, e.g. an initial
+    event with an empty name and no manufacturer data, followed later by
+    one carrying the device's local name and the Nordic/Simplo
+    manufacturer bytes. Returning whichever event happens to arrive first
+    can hand callers an empty, unparseable report even though the bike
+    *was* seen. This function instead merges every matching-address event
+    across the whole scan (see :func:`_merge_advertisement_data`) and
+    resolves as soon as the merged manufacturer data parses -- via
+    :func:`~specialized_turbo.bike_info.parse_bike_info` -- into a
+    *complete* ``BikeInfo`` (a TCU1 record, or a full 10-byte Nordic
+    record). Otherwise it keeps scanning until *timeout* and returns the
+    best merged report seen so far, which may still be incomplete (e.g. an
+    Apple-iBeacon-only advertisement stays distinguishable from a fully
+    decoded one). Returns ``None`` only if *no* event from *address* was
+    seen at all within *timeout* seconds.
+    """
+    loop = asyncio.get_running_loop()
+    resolved: asyncio.Future[None] = loop.create_future()
+
+    merged_device: BLEDevice | None = None
+    merged_adv: AdvertisementData | None = None
+
+    def _detection_callback(device: BLEDevice, adv: AdvertisementData) -> None:
+        nonlocal merged_device, merged_adv
+        if device.address.lower() != address.lower():
+            return
+        # Same "retain latest non-None" rule as local_name/tx_power below:
+        # a later event with no OS-cached name yet must not blank out one
+        # already seen from an earlier event for this address.
+        if merged_device is None or device.name is not None:
+            merged_device = device
+        merged_adv = _merge_advertisement_data(merged_adv, adv)
+        if not resolved.done():
+            info = parse_bike_info(
+                merged_device.name or "", merged_adv.manufacturer_data
+            )
+            if info.complete:
+                resolved.set_result(None)
+
+    scanner = BleakScanner(detection_callback=_detection_callback)
+    await scanner.start()
+    try:
+        try:
+            await asyncio.wait_for(asyncio.shield(resolved), timeout=timeout)
+        except (TimeoutError, asyncio.TimeoutError):
+            pass
+    finally:
+        await scanner.stop()
+        if not resolved.done():
+            resolved.cancel()
+
+    if merged_device is None or merged_adv is None:
+        return None
+    return merged_device, merged_adv
+
+
 # ---------------------------------------------------------------------------
 # Connection
 # ---------------------------------------------------------------------------
@@ -115,7 +220,7 @@ class SpecializedConnection:
 
     TCX2+ bikes require the pre-connect advertisement parse (*bike_info*, see
     :func:`specialized_turbo.bike_info.parse_bike_info`) and the AES key
-    fetched out-of-band from the account keystore (*key*, a
+    obtained from an external, authorized source (*key*, a
     :class:`~specialized_turbo.keystore.models.BikeEncryptionKey`) so the
     official identification handshake can run and negotiate the protocol
     revision. TCU1 bikes need neither. Usage::
@@ -161,8 +266,9 @@ class SpecializedConnection:
             (:class:`~specialized_turbo.identification.TCXIdentification`)
             can select the right wire-id map.  Ignored for TCU1.
         key :
-            The bike's AES-128 encryption key, fetched out-of-band from the
-            account keystore (never available over BLE). Required for a
+            The bike's AES-128 encryption key. This key can never be
+            obtained over BLE; it must come from an external, authorized
+            source (e.g. a key file supplied out-of-band). Required for a
             TCX connection, since every complete TCX ``BikeInfo`` implies
             AES-CTR encryption. Never logged -- see
             :class:`~specialized_turbo.keystore.models.BikeEncryptionKey`.

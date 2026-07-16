@@ -300,6 +300,12 @@ What the bike *does* provide during identification is the AES-CTR **IV**: the
 clear `SYSTEM_GET_NEW_VI` (`0x0A00`) response body carries the 16-byte IV.
 The session key is the backend key; the session IV is this per-connection IV.
 
+This library implements no account/login or network client of any kind for
+acquiring that key: it is a caller-supplied input (see the `key` parameter of
+`SpecializedConnection` and the CLI's `--key-file`, documented in the main
+[README](../README.md#encryption-keys-key-file-format)), obtained by the
+caller from an external, authorized source.
+
 ### Key derivation
 
 The backend `BTEncryptionInfo.key` is a 64-character base64 string. Deriving

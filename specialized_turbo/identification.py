@@ -3,23 +3,24 @@ Official TCX2+ identification protocol (post-connect, encrypted).
 
 This is the profile-aware identification **state machine** that a connection
 layer drives after a BLE link is established and (for encrypted bikes) the
-AES key has been fetched out-of-band from the account keystore.  It ties
-together the previously-added foundation layers -- :mod:`bike_info`,
-:mod:`wire_profiles`, :mod:`keystore`, :mod:`transport`/:mod:`session`/
-:mod:`encryption` -- into one tested unit.  It does **not** open a BLE
-connection, scan, pair, or start telemetry; those remain the caller's job.
+AES key has been supplied by the caller, obtained from an external,
+authorized source.  It ties together the previously-added foundation layers
+-- :mod:`bike_info`, :mod:`wire_profiles`, :mod:`keystore`,
+:mod:`transport`/:mod:`session`/:mod:`encryption` -- into one tested unit.
+It does **not** open a BLE connection, scan, pair, or start telemetry;
+those remain the caller's job.
 
 Corrected facts this layer encodes (superseding the earlier, buggy
 ``coordinator_helpers.identify_tcx`` flow, which is kept only as a legacy
 shim):
 
-- The AES key is **never** read over BLE.  It comes from the account
-  keystore (:class:`specialized_turbo.keystore.models.BikeEncryptionKey`).
+- The AES key is **never** read over BLE.  It must come from an external,
+  authorized source (:class:`specialized_turbo.keystore.models.BikeEncryptionKey`).
   In particular TCX parameter 14 (``BATTERY1_FIRMWARE``) is a 3-byte
   firmware version string, *not* key material.
 - ``SYSTEM_GET_NEW_VI`` (wire ``0x0A00``) is a **clear** control frame whose
   request carries a single required zero byte and whose response body is the
-  16-byte AES-CTR **IV**.  The IV plus the keystore key are what initialise
+  16-byte AES-CTR **IV**.  The IV plus the supplied key are what initialise
   the encrypted session -- no key is exchanged here.
 - ``SYSTEM_HMI_PROTOCOL_VERSION`` (wire ``0x0A01``) is a **clear** control
   frame whose response carries the bike's BLE and USB protocol revision
@@ -113,8 +114,8 @@ class UnsupportedRevisionError(IdentificationError):
 class MissingEncryptionKeyError(IdentificationError):
     """No :class:`BikeEncryptionKey` was supplied for an encrypted bike.
 
-    The key must be fetched out-of-band from the account keystore; it is
-    never available over BLE.
+    The key can never be obtained over BLE; it must come from an external,
+    authorized source (e.g. a key file supplied out-of-band).
     """
 
 
@@ -306,8 +307,8 @@ class TCXIdentification:
 
     The *transport* must already be connected (and, on real bikes, paired).
     *bike_info* is the complete pre-connect advertisement parse (its
-    ``tcx_generation`` selects the wire map); *key* is the AES key fetched
-    from the account keystore.  Call :meth:`run` once.
+    ``tcx_generation`` selects the wire map); *key* is the AES key obtained
+    from an external, authorized source.  Call :meth:`run` once.
     """
 
     def __init__(
@@ -405,8 +406,9 @@ class TCXIdentification:
             )
         if self._key is None:
             raise MissingEncryptionKeyError(
-                "No encryption key supplied; fetch it from the account "
-                "keystore (it is never available over BLE)"
+                "No encryption key supplied. This key can never be obtained "
+                "over BLE; it must come from an external, authorized source "
+                "(e.g. a key file supplied out-of-band)."
             )
         return generation, self._key
 

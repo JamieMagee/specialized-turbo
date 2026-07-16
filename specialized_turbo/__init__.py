@@ -13,7 +13,7 @@ Quick start (TCX2+ bikes)::
 
     async def main():
         # ``bike_info`` comes from the BLE advertisement (parse_bike_info)
-        # and ``key`` from the Specialized account keystore -- a TCX2+ bike
+        # and ``key`` from an external, authorized source -- a TCX2+ bike
         # cannot be identified without both.
         async with SpecializedConnection(
             "DC:DD:BB:4A:D6:55", pin="946166", bike_info=info, key=key
@@ -26,9 +26,10 @@ Quick start (TCX2+ bikes)::
 
     asyncio.run(main())
 
-``BikeEncryptionKey`` and the keystore models import without the optional
-``aiohttp`` dependency; only the network ``KeystoreClient`` needs the
-``keystore`` extra (``pip install "specialized-turbo[keystore]"``).
+``BikeEncryptionKey`` and the keystore models are offline, local-only
+containers for key material: this library has no network client or account
+login of any kind. A TCX2+ bike's key must be supplied by the caller,
+obtained from an external, authorized source.
 """
 
 from __future__ import annotations
@@ -99,6 +100,7 @@ from .connection import (
     UnsupportedTCXOperationError as UnsupportedTCXOperationError,
     scan_for_bikes as scan_for_bikes,
     find_bike_by_address as find_bike_by_address,
+    find_advertisement_by_address as find_advertisement_by_address,
 )
 from .bike_info import (
     BikeInfo as BikeInfo,
@@ -250,6 +252,7 @@ __all__ = [
     "UnsupportedTCXOperationError",
     "scan_for_bikes",
     "find_bike_by_address",
+    "find_advertisement_by_address",
     # Advertisement parsing / identification
     "BikeInfo",
     "parse_bike_info",

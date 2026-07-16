@@ -300,8 +300,9 @@ async def identify_tcx(
 
        New code should use :class:`specialized_turbo.identification.TCXIdentification`
        (or the :func:`specialized_turbo.identification.identify` convenience
-       wrapper), which fetches the real key from the account keystore and
-       negotiates generation/revision-correct wire ids.
+       wrapper), which uses the caller-supplied key (obtained from an
+       external, authorized source) and negotiates generation/revision-correct
+       wire ids.
        :class:`~specialized_turbo.connection.SpecializedConnection` no longer
        calls this shim -- it drives ``TCXIdentification`` directly.  This
        function is retained only for backward compatibility with any
