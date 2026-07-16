@@ -18,7 +18,10 @@ from specialized_turbo.protocol import (
     get_service_characteristics,
 )
 from specialized_turbo.telemetry import TelemetryMonitor
-from specialized_turbo.transport import NotificationCallback
+from specialized_turbo.transport import (
+    NotificationCallback,
+    TCXTransportDisconnectedError,
+)
 
 
 @dataclass
@@ -43,6 +46,7 @@ class _FakeBleakClient:
         self.writes: list[tuple[str, bytes, bool | None]] = []
         self.reads: list[str] = []
         self.read_response = bytes.fromhex("000c31")
+        self.disconnect_on_param: int | None = None
 
     async def connect(self) -> None:
         self.is_connected = True
@@ -77,6 +81,14 @@ class _FakeBleakClient:
         packet = bytes(data)
         self.writes.append((characteristic, packet, response))
 
+        if len(packet) == 20:
+            param_id = int.from_bytes(unpack_tcx(packet)[:2], "big")
+            if param_id == self.disconnect_on_param:
+                self.is_connected = False
+                if self.disconnected_callback is not None:
+                    self.disconnected_callback(self)
+                return
+
         request_service = get_service_characteristics(
             BLEProfile.TCX,
             BLEServiceID.REQUEST,
@@ -84,7 +96,6 @@ class _FakeBleakClient:
         if characteristic != request_service.write or len(packet) != 20:
             return
 
-        param_id = int.from_bytes(unpack_tcx(packet)[:2], "big")
         if param_id == 14:
             reply = pack_tcx(bytes.fromhex("f8ff000e05"))
         elif param_id == 26:
@@ -101,6 +112,20 @@ class _FakeBleakClient:
             _FakeCharacteristic(uuid),
         )
         callback(characteristic, bytearray(data))
+
+
+class _DisconnectingBleakClient(_FakeBleakClient):
+    def __init__(
+        self,
+        address: object,
+        *,
+        disconnected_callback: Callable[[Any], None] | None = None,
+    ) -> None:
+        super().__init__(
+            address,
+            disconnected_callback=disconnected_callback,
+        )
+        self.disconnect_on_param = 300
 
 
 @pytest.fixture
@@ -148,6 +173,23 @@ async def test_tcx_connect_identifies_without_gatt_reads(
 
 
 @pytest.mark.asyncio
+async def test_disconnect_during_identification_fails_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = SpecializedConnection("AA:BB:CC:DD:EE:FF")
+    monkeypatch.setattr(
+        connection_module,
+        "BleakClient",
+        _DisconnectingBleakClient,
+    )
+
+    with pytest.raises(TCXTransportDisconnectedError, match="disconnected"):
+        await connection.connect()
+
+    assert not connection.is_connected
+
+
+@pytest.mark.asyncio
 async def test_tcx_read_and_stream_control_use_notifications(
     fake_bleak: type[_FakeBleakClient],
 ) -> None:
@@ -187,6 +229,29 @@ async def test_tcx_read_and_stream_control_use_notifications(
     assert disable_response is False
 
     await connection.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_during_unsubscribe_does_not_race_transport_cleanup(
+    fake_bleak: type[_FakeBleakClient],
+) -> None:
+    connection = SpecializedConnection("AA:BB:CC:DD:EE:FF")
+    await connection.connect()
+    client = fake_bleak.instance
+    assert client is not None
+
+    def notification(
+        _sender: BleakGATTCharacteristic,
+        _data: bytearray,
+    ) -> None:
+        pass
+
+    await connection.subscribe_notifications(notification)
+    client.disconnect_on_param = 346
+
+    await connection.unsubscribe_notifications()
+
+    assert not connection.is_connected
 
 
 @pytest.mark.asyncio

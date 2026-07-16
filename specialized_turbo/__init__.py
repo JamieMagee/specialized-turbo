@@ -124,6 +124,7 @@ from .transport import (
     BLETraceEvent as BLETraceEvent,
     TCXNotificationTransport as TCXNotificationTransport,
     TCXRequestTimeoutError as TCXRequestTimeoutError,
+    TCXTransportDisconnectedError as TCXTransportDisconnectedError,
 )
 from .protocol import (
     parse_tcx_message as parse_tcx_message,
@@ -238,6 +239,7 @@ __all__ = [
     "BLETraceEvent",
     "TCXNotificationTransport",
     "TCXRequestTimeoutError",
+    "TCXTransportDisconnectedError",
     # Coordinator helpers
     "TCX_POLL_PARAMS",
     "parse_notification",

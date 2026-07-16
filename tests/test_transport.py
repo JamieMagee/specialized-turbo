@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
@@ -24,6 +25,7 @@ from specialized_turbo.transport import (
     NotificationCallback,
     TCXNotificationTransport,
     TCXRequestTimeoutError,
+    TCXTransportDisconnectedError,
     TraceCallback,
 )
 
@@ -195,6 +197,21 @@ async def test_request_times_out_and_clears_pending_state() -> None:
     client.on_write = respond
     response = await transport.request_parameter(26)
     assert parse_tcx_message(response).converted_value == 49
+
+
+@pytest.mark.asyncio
+async def test_disconnect_fails_pending_request_immediately() -> None:
+    client = _FakeClient()
+    transport = _transport(client, request_timeout=60)
+    request = asyncio.create_task(transport.request_parameter(26))
+    await asyncio.sleep(0)
+
+    transport.mark_disconnected()
+
+    with pytest.raises(TCXTransportDisconnectedError, match="disconnected"):
+        await request
+    with pytest.raises(TCXTransportDisconnectedError, match="disconnected"):
+        await transport.request_parameter(26)
 
 
 @pytest.mark.asyncio

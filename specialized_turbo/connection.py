@@ -190,16 +190,21 @@ class SpecializedConnection:
         # Create protocol session
         if self._generation == BLEProfile.TCX:
             self._session = TCXSession()
-            self._tcx_transport = TCXNotificationTransport(
+            transport = TCXNotificationTransport(
                 self._client,
                 session=self._session,
                 trace_callback=self._trace_callback,
             )
-            await self._tcx_transport.subscribe_for_identification()
-            session = await identify_tcx(self._tcx_transport)
+            self._tcx_transport = transport
+            await transport.subscribe_for_identification()
+            session = await identify_tcx(transport)
+            if not self._client.is_connected:
+                raise RuntimeError(
+                    f"Disconnected from {self._address} during identification"
+                )
             self._session = session
-            self._tcx_transport.session = session
-            await self._tcx_transport.subscribe_for_realtime()
+            transport.session = session
+            await transport.subscribe_for_realtime()
         else:
             self._session = TCU1Session()
 
@@ -243,14 +248,15 @@ class SpecializedConnection:
             raise RuntimeError("Not connected")
 
         if self._generation == BLEProfile.TCX:
-            if self._tcx_transport is None:
+            transport = self._tcx_transport
+            if transport is None:
                 raise RuntimeError("TCX transport is not initialized")
-            self._tcx_transport.add_listener(callback)
+            transport.add_listener(callback)
             self._telemetry_callback = callback
             try:
-                await self._tcx_transport.set_realtime_enabled(True)
+                await transport.set_realtime_enabled(True)
             except Exception:
-                self._tcx_transport.remove_listener(callback)
+                transport.remove_listener(callback)
                 self._telemetry_callback = None
                 raise
         else:
@@ -262,14 +268,13 @@ class SpecializedConnection:
         """Stop receiving telemetry notifications."""
         if self._client and self._notification_started:
             if self._generation == BLEProfile.TCX:
-                if self._tcx_transport is not None:
+                transport = self._tcx_transport
+                if transport is not None:
                     try:
-                        await self._tcx_transport.set_realtime_enabled(False)
+                        await transport.set_realtime_enabled(False)
                     finally:
                         if self._telemetry_callback is not None:
-                            self._tcx_transport.remove_listener(
-                                self._telemetry_callback
-                            )
+                            transport.remove_listener(self._telemetry_callback)
                         self._telemetry_callback = None
             else:
                 await self._client.stop_notify(self._char_notify)
@@ -402,6 +407,9 @@ class SpecializedConnection:
     def _on_disconnect(self, client: BleakClient) -> None:
         logger.warning("Disconnected from bike!")
         self._notification_started = False
+        transport = self._tcx_transport
         self._tcx_transport = None
+        if transport is not None:
+            transport.mark_disconnected()
         if self._disconnect_cb:
             self._disconnect_cb(client)

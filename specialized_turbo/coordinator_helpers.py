@@ -30,7 +30,7 @@ from .protocol import (
     ParsedMessage,
 )
 from .session import ProtocolSession, TCXSession
-from .transport import TCXNotificationTransport
+from .transport import TCXNotificationTransport, TCXTransportDisconnectedError
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +125,8 @@ async def poll_tcx(
                 continue
             snapshot.update_from_message(msg)
             updated = True
+        except TCXTransportDisconnectedError:
+            raise
         except Exception:  # noqa: BLE001
             logger.debug("Failed to poll TCX param %d", int(param), exc_info=True)
     return updated
@@ -172,6 +174,8 @@ async def identify_tcx(
 
             if param == BikeParameter.BATTERY1_FIRMWARE:
                 key_response = inner
+    except TCXTransportDisconnectedError:
+        raise
     except Exception:  # noqa: BLE001
         logger.warning(
             "TCX identification handshake failed, using unencrypted session",

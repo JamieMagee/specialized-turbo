@@ -57,6 +57,10 @@ class TCXRequestTimeoutError(TimeoutError):
         self.timeout = timeout
 
 
+class TCXTransportDisconnectedError(ConnectionError):
+    """Raised when the BLE link closes during a TCX transaction."""
+
+
 @dataclass(slots=True)
 class _PendingRequest:
     param_id: int
@@ -83,6 +87,7 @@ class TCXNotificationTransport:
         self._subscribed: set[BLEServiceID] = set()
         self._pending: _PendingRequest | None = None
         self._request_lock = asyncio.Lock()
+        self._disconnected = False
 
     @property
     def session(self) -> TCXSession:
@@ -103,8 +108,20 @@ class TCXNotificationTransport:
         if callback in self._listeners:
             self._listeners.remove(callback)
 
+    def mark_disconnected(self) -> None:
+        """Fail any in-flight request after the BLE link closes."""
+        self._disconnected = True
+        pending = self._pending
+        if pending is not None and not pending.future.done():
+            pending.future.set_exception(
+                TCXTransportDisconnectedError(
+                    "Bike disconnected during TCX transaction"
+                )
+            )
+
     async def subscribe(self, service_id: BLEServiceID) -> None:
         """Enable notifications for one TCX service."""
+        self._raise_if_disconnected()
         if service_id in self._subscribed:
             return
 
@@ -186,6 +203,7 @@ class TCXNotificationTransport:
         data: bytes | bytearray,
     ) -> None:
         """Write an already-framed packet without response."""
+        self._raise_if_disconnected()
         characteristic = get_service_characteristics(BLEProfile.TCX, service_id).write
         packet = bytes(data)
         self._emit_trace("tx", service_id, characteristic, packet)
@@ -204,8 +222,10 @@ class TCXNotificationTransport:
         timeout: float | None,
     ) -> bytes:
         request_timeout = self._request_timeout if timeout is None else timeout
+        self._raise_if_disconnected()
 
         async with self._request_lock:
+            self._raise_if_disconnected()
             future = asyncio.get_running_loop().create_future()
             self._pending = _PendingRequest(param_id, service_id, future)
             try:
@@ -259,6 +279,12 @@ class TCXNotificationTransport:
             param_id, _reason = parse_nak_packet(payload)
             return param_id
         return decode_parameter_id(payload)
+
+    def _raise_if_disconnected(self) -> None:
+        if self._disconnected:
+            raise TCXTransportDisconnectedError(
+                "Bike disconnected during TCX transaction"
+            )
 
     def _emit_trace(
         self,
