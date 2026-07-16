@@ -13,7 +13,7 @@ from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
 from .framing import is_nak_packet, parse_nak_packet
-from .parameters import decode_parameter_id, encode_parameter_id
+from .parameters import BikeParameter, decode_parameter_id, encode_parameter_id
 from .protocol import (
     BLEProfile,
     BLEServiceID,
@@ -21,6 +21,7 @@ from .protocol import (
     get_service_characteristics,
 )
 from .session import TCXSession
+from .wire_profiles import ProtocolRevision, wire_id_for
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,26 @@ class TCXTransportDisconnectedError(ConnectionError):
     """Raised when the BLE link closes during a TCX transaction."""
 
 
+class TCXProtocolNotNegotiatedError(RuntimeError):
+    """Raised when a ``BikeParameter`` is addressed before identification.
+
+    Resolving a :class:`~specialized_turbo.parameters.BikeParameter` to a
+    wire command id requires the :class:`~specialized_turbo.wire_profiles.
+    ProtocolRevision` negotiated during identification (see
+    :class:`~specialized_turbo.identification.TCXIdentification`).  This is
+    raised instead of guessing or silently reusing the ``BikeParameter``
+    value as if it were a wire id.
+    """
+
+    def __init__(self, param: BikeParameter) -> None:
+        super().__init__(
+            f"Cannot resolve {param.name} to a wire id: no TCX protocol "
+            "revision has been negotiated yet (identification must "
+            "complete first)"
+        )
+        self.param = param
+
+
 @dataclass(slots=True)
 class _PendingRequest:
     wire_id: int
@@ -93,6 +114,7 @@ class TCXNotificationTransport:
         self._pending: _PendingRequest | None = None
         self._request_lock = asyncio.Lock()
         self._disconnected = False
+        self._protocol_revision: ProtocolRevision | None = None
 
     @property
     def session(self) -> TCXSession:
@@ -102,6 +124,23 @@ class TCXNotificationTransport:
     @session.setter
     def session(self, session: TCXSession) -> None:
         self._session = session
+
+    @property
+    def protocol_revision(self) -> ProtocolRevision | None:
+        """Generation/revision negotiated by a completed identification handshake.
+
+        ``None`` until :class:`~specialized_turbo.identification.
+        TCXIdentification` has completed and the connection layer installs
+        the negotiated :class:`~specialized_turbo.wire_profiles.
+        ProtocolRevision` here. Consumers should treat this as read-only;
+        it is set once, by the connection layer, immediately after a
+        successful identification.
+        """
+        return self._protocol_revision
+
+    @protocol_revision.setter
+    def protocol_revision(self, revision: ProtocolRevision) -> None:
+        self._protocol_revision = revision
 
     def add_listener(self, callback: NotificationCallback) -> None:
         """Forward incoming notifications to *callback*."""
@@ -212,25 +251,77 @@ class TCXNotificationTransport:
         """
         return await self.request_wire_parameter(param_id, timeout=timeout)
 
+    def _resolve_wire_id(self, param: BikeParameter) -> int:
+        """Resolve *param* to a wire id through the negotiated protocol revision.
+
+        Raises:
+            TCXProtocolNotNegotiatedError: identification hasn't completed
+                yet, so no :class:`~specialized_turbo.wire_profiles.
+                ProtocolRevision` is installed.
+        """
+        revision = self._protocol_revision
+        if revision is None:
+            raise TCXProtocolNotNegotiatedError(param)
+        return wire_id_for(param, revision.generation, revision.revision)
+
+    async def request_bike_parameter(
+        self,
+        param: BikeParameter,
+        *,
+        timeout: float | None = None,
+    ) -> bytes:
+        """Read a TCX2+ value by its stable app-level ``BikeParameter`` id.
+
+        Resolves *param* to a wire command id through the
+        :class:`~specialized_turbo.wire_profiles.ProtocolRevision`
+        negotiated during identification (see :attr:`protocol_revision`),
+        then correlates the response by that wire id -- this is the
+        profile-aware replacement for passing a raw wire id (or a
+        ``BikeParameter`` value that coincidentally matches one) directly
+        to :meth:`request_parameter`/:meth:`request_wire_parameter`.
+        """
+        wire_id = self._resolve_wire_id(param)
+        return await self.request_wire_parameter(wire_id, timeout=timeout)
+
     async def write_parameter(
         self,
         param_id: int,
         data: bytes | bytearray,
     ) -> None:
-        """Write a parameter on service 3 without waiting for a GATT response."""
+        """Write to a wire command id on service 3 without a GATT response.
+
+        .. deprecated::
+           Treats *param_id* directly as the wire id. New code addressing a
+           :class:`~specialized_turbo.parameters.BikeParameter` should use
+           :meth:`write_bike_parameter`, which resolves the wire id through
+           the negotiated protocol revision instead of assuming the two id
+           spaces coincide.
+        """
         payload = build_tcx_write(param_id, data)
         await self.write_frame(
             BLEServiceID.DATA,
             self._session.pack(payload),
         )
 
+    async def write_bike_parameter(
+        self,
+        param: BikeParameter,
+        data: bytes | bytearray,
+    ) -> None:
+        """Write a TCX2+ value by its stable app-level ``BikeParameter`` id.
+
+        Resolves *param* to a wire command id through the negotiated
+        :attr:`protocol_revision` before writing -- the profile-aware
+        replacement for :meth:`write_parameter`.
+        """
+        wire_id = self._resolve_wire_id(param)
+        await self.write_parameter(wire_id, data)
+
     async def set_realtime_enabled(self, enabled: bool) -> None:
         """Enable or disable the bike's real-time telemetry stream."""
-        from .parameters import BikeParameter
-
         await self.subscribe_for_realtime()
-        await self.write_parameter(
-            int(BikeParameter.SYSTEM_REAL_TIME_DATA_ENB),
+        await self.write_bike_parameter(
+            BikeParameter.SYSTEM_REAL_TIME_DATA_ENB,
             bytes([enabled]),
         )
 

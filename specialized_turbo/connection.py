@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import warnings
 from collections.abc import Callable
 from typing import Any
 
@@ -15,7 +16,15 @@ from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
-from .coordinator_helpers import identify_tcx
+from .bike_info import BikeInfo
+from .identification import (
+    IdentificationResult,
+    TCXIdentification,
+    WireMessage,
+    parse_wire_message,
+)
+from .keystore.models import BikeEncryptionKey
+from .parameters import BikeParameter
 from .protocol import (
     BLEProfile,
     build_request,
@@ -28,14 +37,20 @@ from .protocol import (
     parse_tcx_message,
     ParsedMessage,
 )
-from .session import ProtocolSession, TCU1Session, TCXSession
+from .session import ProtocolSession, TCU1Session
 from .transport import (
     NotificationCallback,
     TCXNotificationTransport,
     TraceCallback,
 )
+from .wire_profiles import ProtocolRevision
 
 logger = logging.getLogger(__name__)
+
+#: Sentinel used when no ``BikeInfo`` is supplied to :class:`SpecializedConnection`.
+#: ``complete=False`` routes straight into :class:`~specialized_turbo.
+#: identification.IncompleteBikeInfoError` instead of an ``AttributeError``.
+_UNKNOWN_BIKE_INFO = BikeInfo(name="", bike_name="", is_bike=False, complete=False)
 
 
 # ---------------------------------------------------------------------------
@@ -104,8 +119,11 @@ class SpecializedConnection:
         *,
         pin: str | None = None,
         generation: BLEProfile = BLEProfile.TCX,
+        bike_info: BikeInfo | None = None,
+        key: BikeEncryptionKey | None = None,
         disconnect_callback: Callable[[BleakClient], None] | None = None,
         trace_callback: TraceCallback | None = None,
+        identification_timeout: float | None = None,
     ) -> None:
         """
         Parameters
@@ -118,14 +136,33 @@ class SpecializedConnection:
         generation :
             Protocol generation (TCU1 or TCX).  Determines which
             GATT UUIDs to use.  Defaults to TCX.
+        bike_info :
+            The pre-connect advertisement parse (see
+            :func:`specialized_turbo.bike_info.parse_bike_info`).  Required
+            for a TCX connection: it must be ``complete`` and carry a
+            ``tcx_generation`` so the official identification handshake
+            (:class:`~specialized_turbo.identification.TCXIdentification`)
+            can select the right wire-id map.  Ignored for TCU1.
+        key :
+            The bike's AES-128 encryption key, fetched out-of-band from the
+            account keystore (never available over BLE). Required for a
+            TCX connection, since every complete TCX ``BikeInfo`` implies
+            AES-CTR encryption. Never logged -- see
+            :class:`~specialized_turbo.keystore.models.BikeEncryptionKey`.
         disconnect_callback :
             Optional callback invoked if the bike disconnects unexpectedly.
         trace_callback :
             Optional callback receiving every raw TCX write and notification.
+        identification_timeout :
+            Optional per-request timeout (seconds) for each identification
+            step. Defaults to the transport's own timeout.
         """
         self._address = address_or_device
         self._pin = pin
         self._generation = generation
+        self._bike_info = bike_info
+        self._key = key
+        self._identification_timeout = identification_timeout
         self._char_notify = get_char_notify(generation)
         self._char_request_read = get_char_request_read(generation)
         self._char_request_write = get_char_request_write(generation)
@@ -137,6 +174,8 @@ class SpecializedConnection:
         self._tcx_transport: TCXNotificationTransport | None = None
         self._telemetry_callback: NotificationCallback | None = None
         self._notification_started = False
+        self._identification_result: IdentificationResult | None = None
+        self._protocol_revision: ProtocolRevision | None = None
 
     # -- context manager --------------------------------------------------
 
@@ -189,26 +228,61 @@ class SpecializedConnection:
 
         # Create protocol session
         if self._generation == BLEProfile.TCX:
-            self._session = TCXSession()
             transport = TCXNotificationTransport(
                 self._client,
-                session=self._session,
                 trace_callback=self._trace_callback,
             )
             self._tcx_transport = transport
-            await transport.subscribe_for_identification()
-            session = await identify_tcx(transport)
-            if not self._client.is_connected:
-                raise RuntimeError(
-                    f"Disconnected from {self._address} during identification"
+            bike_info = (
+                self._bike_info if self._bike_info is not None else _UNKNOWN_BIKE_INFO
+            )
+            identification = TCXIdentification(
+                transport,
+                bike_info,
+                self._key,
+                timeout=self._identification_timeout,
+            )
+            try:
+                result = await identification.run()
+                self._session = transport.session
+                transport.protocol_revision = result.protocol_revision
+                self._protocol_revision = result.protocol_revision
+                self._identification_result = result
+                await transport.subscribe_for_realtime()
+            except Exception:
+                logger.warning(
+                    "TCX connect failed during identification/setup "
+                    "(failed_phase=%s, phase=%s)",
+                    identification.failed_phase,
+                    identification.phase,
                 )
-            self._session = session
-            transport.session = session
-            await transport.subscribe_for_realtime()
+                await self._reset_after_failed_tcx_connect()
+                raise
         else:
             self._session = TCU1Session()
 
         logger.info("Connection established to %s", self._address)
+
+    async def _reset_after_failed_tcx_connect(self) -> None:
+        """Return to a clean, retryable state after a failed TCX identification.
+
+        Never leaves partial state (a stale transport, a half-negotiated
+        session) behind: a subsequent :meth:`connect` call starts fresh.
+        """
+        self._tcx_transport = None
+        self._session = TCU1Session()
+        self._protocol_revision = None
+        self._identification_result = None
+        client = self._client
+        self._client = None
+        if client is not None and client.is_connected:
+            try:
+                await client.disconnect()
+            except Exception:
+                logger.debug(
+                    "Failed to disconnect after failed TCX identification",
+                    exc_info=True,
+                )
 
     async def disconnect(self) -> None:
         """Cleanly disconnect from the bike."""
@@ -227,6 +301,8 @@ class SpecializedConnection:
             logger.info("Disconnected from %s", self._address)
         self._client = None
         self._tcx_transport = None
+        self._protocol_revision = None
+        self._identification_result = None
 
     @property
     def is_connected(self) -> bool:
@@ -236,6 +312,26 @@ class SpecializedConnection:
     def session(self) -> ProtocolSession:
         """The active protocol session (TCU1Session or TCXSession)."""
         return self._session
+
+    @property
+    def protocol_revision(self) -> ProtocolRevision | None:
+        """The active TCX generation/revision, negotiated during identification.
+
+        Read-only: ``None`` for a TCU1 connection, or before a TCX
+        identification handshake has completed. Consumers should use this
+        (rather than assuming a generation/revision) to know which wire-id
+        map is in effect -- see :mod:`specialized_turbo.wire_profiles`.
+        """
+        return self._protocol_revision
+
+    @property
+    def identification_result(self) -> IdentificationResult | None:
+        """The full result of the TCX identification handshake, if any.
+
+        Read-only: ``None`` for a TCU1 connection, or before identification
+        has completed.
+        """
+        return self._identification_result
 
     # -- notifications ----------------------------------------------------
 
@@ -317,6 +413,16 @@ class SpecializedConnection:
         """
         Query a TCX2+ value through a write/notification transaction.
 
+        .. deprecated::
+           *param_id* is treated directly as the wire command id (the
+           legacy behaviour from before generation/revision-aware wire
+           mapping existed).  It only returns the right value for
+           parameters whose wire id happens to equal their
+           :class:`~specialized_turbo.parameters.BikeParameter` value.  New
+           code should call :meth:`request_tcx_parameter` instead, which
+           resolves the wire id through the ``ProtocolRevision`` negotiated
+           during identification (see :attr:`protocol_revision`).
+
         Writes a CRC-framed parameter request without response, then waits for
         the matching notification from the bike.
 
@@ -324,6 +430,14 @@ class SpecializedConnection:
         ``nak_reason`` set to the rejection code.  A warning is logged
         with the parameter and reason for diagnostics.
         """
+        warnings.warn(
+            "request_tcx_value(param_id) addresses the bike by a raw wire "
+            "id and is deprecated; use request_tcx_parameter(BikeParameter) "
+            "instead, which resolves the wire id through the negotiated "
+            "ProtocolRevision.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if self._client is None or self._tcx_transport is None:
             raise RuntimeError("Not connected")
         logger.debug("TCX notification request param %d", param_id)
@@ -345,16 +459,68 @@ class SpecializedConnection:
 
         return msg
 
+    async def request_tcx_parameter(
+        self,
+        param: BikeParameter,
+        *,
+        timeout: float | None = None,
+    ) -> WireMessage:
+        """
+        Query a TCX2+ value by its stable app-level ``BikeParameter`` id.
+
+        Resolves *param* to a wire command id through the
+        :class:`~specialized_turbo.wire_profiles.ProtocolRevision`
+        negotiated during identification (see :attr:`protocol_revision`),
+        then correlates the response by that wire id.  This is the
+        profile-aware replacement for :meth:`request_tcx_value`: it never
+        assumes a ``BikeParameter`` value coincides with its wire id.
+
+        If the bike rejects the request the returned :class:`~specialized_
+        turbo.identification.WireMessage` has ``nak_reason`` set, and a
+        warning is logged with the parameter and reason for diagnostics.
+        """
+        if self._client is None or self._tcx_transport is None:
+            raise RuntimeError("Not connected")
+        revision = self._protocol_revision
+        if revision is None:
+            raise RuntimeError(
+                "TCX identification has not completed; no protocol "
+                "revision has been negotiated"
+            )
+        logger.debug("TCX notification request %s", param.name)
+        response = await self._tcx_transport.request_bike_parameter(
+            param, timeout=timeout
+        )
+        msg = parse_wire_message(response, revision.generation, revision.revision)
+
+        if msg.nak_reason is not None:
+            logger.warning(
+                "Bike rejected TCX request for %s (wire=0x%04x, reason=0x%02x)",
+                param.name,
+                msg.wire_id,
+                msg.nak_reason,
+            )
+
+        return msg
+
     # -- write commands ----------------------------------------------------
 
     async def write_command(self, data: bytes | bytearray) -> None:
         """
-        Send a write command to the bike.
+        Send a raw write command to the bike.
 
-        *data* is the raw command payload.  For TCU1, pass the bare
-        ``[sender, channel, value…]`` bytes.  For TCX, pass the
-        ``[param_id_be, value…]`` bytes — they will be CRC-framed
-        and encrypted through the session automatically.
+        .. deprecated::
+           For TCX, *data* is treated as an already wire-ready
+           ``[wire_id_be, value…]`` payload -- the caller is responsible
+           for resolving the wire id themselves (e.g. via
+           :mod:`specialized_turbo.wire_profiles`).  Passing a raw
+           :class:`~specialized_turbo.parameters.BikeParameter` value here
+           only writes the intended parameter if it happens to coincide
+           with its wire id.  New code addressing a TCX2+ parameter should
+           call :meth:`write_tcx_parameter` instead, which resolves the
+           wire id through the negotiated :attr:`protocol_revision`. TCU1
+           callers are unaffected: pass the bare
+           ``[sender, channel, value…]`` bytes as before.
         """
         if self._client is None:
             raise RuntimeError("Not connected")
@@ -370,6 +536,27 @@ class SpecializedConnection:
             packed = self._session.pack(data)
             logger.debug("Write command: %s", packed.hex())
             await self._client.write_gatt_char(self._char_write, packed)
+
+    async def write_tcx_parameter(
+        self,
+        param: BikeParameter,
+        data: bytes | bytearray,
+    ) -> None:
+        """
+        Write a TCX2+ value by its stable app-level ``BikeParameter`` id.
+
+        Resolves *param* to a wire command id through the negotiated
+        :attr:`protocol_revision` before writing -- the profile-aware
+        replacement for :meth:`write_command` on the TCX path.
+        """
+        if self._client is None or self._tcx_transport is None:
+            raise RuntimeError("Not connected")
+        if self._protocol_revision is None:
+            raise RuntimeError(
+                "TCX identification has not completed; no protocol "
+                "revision has been negotiated"
+            )
+        await self._tcx_transport.write_bike_parameter(param, data)
 
     async def set_assist_level(self, level: int) -> None:
         """Set the assist level (0=OFF, 1=ECO, 2=TRAIL, 3=TURBO)."""
