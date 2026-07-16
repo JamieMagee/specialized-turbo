@@ -8,8 +8,10 @@ Packets are 20 bytes after CRC framing.  The encryption layout is:
 Bytes 0-1 (the parameter ID) are sent in the clear.  Bytes 2-17 and 18-19
 are encrypted with AES-128-CTR using a per-session key and IV.
 
-Not all packets are encrypted: NAK (``0x0A``) and F8 FF-prefixed packets
-are always transmitted in the clear.
+Not all packets are encrypted: any packet whose first byte is the control
+byte ``0x0A`` -- the legacy one-byte NAK and the ``0x0Axx`` identification
+control frames (``GET_NEW_VI`` / ``HMI_PROTOCOL_VERSION``) -- and F8 FF-prefixed
+NAK envelopes are always transmitted in the clear.  See :func:`is_encryptable`.
 """
 
 from __future__ import annotations
@@ -28,10 +30,25 @@ _CLEAR_PREFIX = b"\xf8\xff"
 
 
 def is_encryptable(data: bytes | bytearray) -> bool:
-    """Return ``True`` if *data* should be encrypted/decrypted."""
+    """Return ``True`` if *data* should be encrypted/decrypted.
+
+    Mirrors the native ``ProtocolSession::isEncryptablePacket``, which
+    returns ``*begin != 0x0A``: every packet whose first byte is the control
+    byte ``0x0A`` is transmitted in the clear.  That single rule covers both
+    the legacy one-byte ``0x0A`` NAK *and* the ``0x0Axx`` identification
+    control frames -- ``SYSTEM_GET_NEW_VI`` (wire ``0x0A00``) and
+    ``SYSTEM_HMI_PROTOCOL_VERSION`` (wire ``0x0A01``).  Their 2-byte wire id
+    is sent big-endian, so ``data[0] == 0x0A``, and they must never be
+    encrypted (the IV is exchanged in the clear ``0x0A00`` body).  No other
+    wire id uses ``0x0A`` as its high byte, so no real telemetry parameter is
+    affected.
+
+    As a conservative superset of the native check, the TCX2+ NAK envelope
+    (``f8 ff`` prefix) is also treated as clear.
+    """
     if len(data) == 0:
         return False
-    if len(data) == 1 and data[0] == NAK_BYTE:
+    if data[0] == NAK_BYTE:
         return False
     if len(data) >= 2 and data[:2] == _CLEAR_PREFIX:
         return False

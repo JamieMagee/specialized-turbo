@@ -26,8 +26,8 @@ not GATT reads.
 | TCX transaction model | ✅ Verified | Write without response, correlate notification |
 | CRC-16/CCITT-FALSE | ✅ Verified | Native `CRC16Calculator` matches `crc_hqx` |
 | AES-128-CTR encryption | ✅ Verified | `ProtocolEncryptionMethod.AES_CTR` confirmed |
-| Key derivation pipeline | ✅ Verified | `BTEncryptionInfo.key` → base64 → AES → hex |
-| Identification handshake | ✅ Verified | Full 7-step over write+notify |
+| Key derivation pipeline | ✅ Verified | `BTEncryptionInfo.key` → base64 → AES → hex (key sourced from the account backend, not a BLE read) |
+| Identification handshake | ✅ Verified | IV install (`0x0A00`) + revision (`0x0A01`) + encrypted mapped reads over write+notify |
 | Packet size (20 bytes) | ✅ Verified | |
 | F8FF NAK marker | ✅ Verified (was misinterpreted as envelope) | `ProtocolSessionTCX2::isNakPacket` checks for `F8 FF`; the library now detects it as a NAK rather than stripping it as a wrapper around valid data |
 | NAK byte (0x0A) | ✅ Verified | Handled in native code |
@@ -144,7 +144,9 @@ Python `framing.py` uses `binascii.crc_hqx(data, 0xFFFF)` — the same algorithm
 - `ProtocolEncryptionMethod` enum: `NONE=0`, `AES_CTR=1` — confirmed.
 - Native functions: `encryptPacket()`, `decryptPacket()` in TurboConnectCore.
 - Bytes 0–1 (param ID) in clear, bytes 2–19 encrypted.
-- Per-session key derived from identification handshake step 4.
+- Per-session key sourced from the account backend (`BTEncryptionInfo`), **not**
+  from a BLE read; the per-connection IV is installed by identification step 1
+  (`SYSTEM_GET_NEW_VI` / wire `0x0A00`), whose response body is the 16-byte IV.
 
 Python `encryption.py` implements the same: header preserved, body encrypted
 with AES-128-CTR. ✅ **Match.**
@@ -168,11 +170,17 @@ Python `encryption.py::derive_key()` implements this exact pipeline.
 both new-bike (7 steps) and reconnect (3 steps) sequences. Returns
 `IdentificationResult` with bike type, serial, firmware versions.
 
-**Python**: Uses the full 7-step sequence because it does not persist the
-official app's known-bike cache. Each step is CRC-framed, written without
-response to service 1, and completed by a matching notification. The official
-app may use the short 3-step sequence when reconnecting to a cached bike.
-✅ **Correct.**
+**Python**: Implemented as `specialized_turbo.identification.TCXIdentification`.
+The full sequence is: (1) `SYSTEM_GET_NEW_VI` (clear `0x0A00`) installs the
+16-byte AES-CTR IV, (2) `SYSTEM_HMI_PROTOCOL_VERSION` (clear `0x0A01`) reports
+the BLE/USB revision that — with the advertised generation — selects the
+`ProtocolRevision`, then (3–7) encrypted mapped reads of `SYSTEM_STATE`,
+`BATTERY1_FIRMWARE` (a **3-byte firmware version**, not key material),
+`SYSTEM_HMI_HW_VERSION`, revision-specific `SYSTEM_MOTOR_TYPE`, and
+`SYSTEM_EBIKE_SERIAL_NUMBER`. Each step CRC-frames the mapped **wire id**,
+writes it without response to service 1, and correlates the reply by wire id
+(a NAK echoes it). The AES key is fetched out-of-band from the account
+keystore, never over BLE. ✅ **Correct.**
 
 ### 9. F8FF NAK Marker
 
@@ -282,9 +290,15 @@ bool ProtocolSession::isEncryptablePacket(vector<uint8_t>* packet) {
 It does **NOT** check for the `F8 FF` prefix here — that check happens elsewhere
 in the packet routing logic.
 
-The Python library's `encryption.py::is_encryptable()` checks for both NAK
-**and** F8FF prefix, which is a superset of the native check. This is safe —
-the Python library is more conservative about what it encrypts.
+`*begin != 0x0A` means **every** packet whose first byte is `0x0A` is sent in
+the clear — not only the legacy one-byte NAK, but also the `0x0Axx`
+identification control frames `SYSTEM_GET_NEW_VI` (`0x0A00`) and
+`SYSTEM_HMI_PROTOCOL_VERSION` (`0x0A01`), whose big-endian wire id starts with
+`0x0A`. The Python library's `encryption.py::is_encryptable()` now matches this
+exactly (first byte `0x0A` → clear), plus the `F8 FF` NAK envelope as a
+conservative superset. A prior version only skipped a *single-byte* `0x0A`,
+which wrongly encrypted the `0x0A00`/`0x0A01` control frames and corrupted the
+IV exchange; that has been fixed.
 
 ### isNakPacket — Decompiled ✅
 
@@ -311,22 +325,21 @@ That bug has been fixed.
 ### Identification Handshake — Decompiled ✅
 
 **initShortSteps** pushes parameter IDs to the identification sequence:
-1. `300` (SYSTEM_GET_NEW_VI)
+1. `300` (SYSTEM_GET_NEW_VI) — clear `0x0A00`; response body installs the IV
 2. `0x16B` = `363` (SYSTEM_STATE)
-3. If TCX3 or TCX4: adds parameter `14` (BATTERY1_FIRMWARE) for encryption key
+3. If TCX3 or TCX4: adds parameter `14` (BATTERY1_FIRMWARE)
 
-This confirms the Python library's 3-step short handshake:
-```python
-steps = [
-    BikeParameter.SYSTEM_GET_NEW_VI,   # 300
-    BikeParameter.SYSTEM_STATE,        # 363
-    BikeParameter.BATTERY1_FIRMWARE,   # 14
-]
-```
+Parameter `14` (`BATTERY1_FIRMWARE`) is read here as a **3-byte firmware
+version**, not a key: its `ParameterType` is `FIRMWARE_VERSION` (length 3). The
+AES key is provisioned separately from the account backend (`BTEncryptionInfo`,
+fetched from the keystore API); it is never carried by a BLE parameter read.
+The current library models the full handshake in
+`specialized_turbo.identification` (IV install → revision → encrypted reads),
+and the legacy `coordinator_helpers.identify_tcx` shim that treated param 14 as
+a key is retained only for backward compatibility.
 
-**Note**: The native code conditionally adds step 3 only for TCX3/TCX4. The
-Python library always includes it, which is safe — if the bike doesn't support
-encryption, the response will be empty and the library falls back to unencrypted.
+**Note**: The native code conditionally adds the firmware step only for
+TCX3/TCX4.
 
 ### Field Decoders — Decompiled ✅
 

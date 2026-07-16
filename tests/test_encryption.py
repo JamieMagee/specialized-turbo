@@ -29,6 +29,20 @@ class TestIsEncryptable:
         packet = pack_tcx(b"\x00\x1a\x34")
         assert is_encryptable(packet) is True
 
+    def test_control_frame_get_new_vi_stays_clear(self):
+        """0x0A00 (GET_NEW_VI) is a control frame -> never encrypted."""
+        assert is_encryptable(b"\x0a\x00\x00") is False
+        assert is_encryptable(pack_tcx(b"\x0a\x00")) is False
+
+    def test_control_frame_protocol_version_stays_clear(self):
+        """0x0A01 (HMI_PROTOCOL_VERSION) is a control frame -> never encrypted."""
+        assert is_encryptable(b"\x0a\x01\x12\x03") is False
+        assert is_encryptable(pack_tcx(b"\x0a\x01")) is False
+
+    def test_any_0a_high_byte_stays_clear(self):
+        """Every 0x0Axx frame is clear (matches native ``*begin != 0x0A``)."""
+        assert is_encryptable(b"\x0a\xff" + b"\x00" * 18) is False
+
 
 class TestEncryptDecryptRoundTrip:
     """AES-CTR is symmetric: encrypt(decrypt(x)) == x and decrypt(encrypt(x)) == x."""

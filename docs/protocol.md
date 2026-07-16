@@ -247,7 +247,7 @@ Verifying: `crc_hqx(bytes.fromhex("f8ff000c0500000000000000000000000000"), 0xFFF
 
 ## AES-128-CTR encryption
 
-Some TCX2+ bikes encrypt notifications and query responses with AES-128-CTR. The encryption key is exchanged during the identification handshake.
+Some TCX2+ bikes encrypt notifications and query responses with AES-128-CTR. The key is provisioned out-of-band by the account backend; the per-connection IV is installed during the identification handshake (see *Key source* below).
 
 ### Encrypted packet layout
 
@@ -259,10 +259,18 @@ The first two bytes (the parameter ID) are always in the clear. Bytes 2-19 are A
 
 ### Packets that skip encryption
 
-Even when encryption is active, these packets are always sent in the clear:
+Even when encryption is active, these packets are always sent in the clear.
+The native `ProtocolSession::isEncryptablePacket` is simply `*begin != 0x0A`,
+so **any** packet whose first byte is `0x0A` bypasses encryption:
 
 - **Legacy NAK**: a single `0x0A` byte (older TCU1/TCX1 negative acknowledgment)
-- **TCX2+ NAK envelope**: any packet starting with `0xF8 0xFF` — the bike's rejection format
+- **`0x0Axx` control frames**: the identification control frames
+  `SYSTEM_GET_NEW_VI` (wire `0x0A00`) and `SYSTEM_HMI_PROTOCOL_VERSION`
+  (wire `0x0A01`). Their 2-byte wire id is sent big-endian, so the first byte
+  is `0x0A`; the IV in the `0x0A00` response body is therefore readable in the
+  clear. No other wire id uses `0x0A` as its high byte.
+- **TCX2+ NAK envelope**: any packet starting with `0xF8 0xFF` — the bike's
+  rejection format (a conservative superset of the native check)
 
 ### TCX2+ NAK rejections
 
@@ -279,11 +287,25 @@ The 2-byte parameter ID is the request that was rejected, echoed back. The
 `framing.is_nak_packet()` and surfaces them through `ParsedMessage.nak_reason`
 rather than parsing the reason byte as if it were valid data.
 
+### Key source
+
+The encryption key is **not** exchanged over BLE. It comes from the bike's
+`BTEncryptionInfo`, which is provisioned out-of-band by the Specialized
+account backend (fetched from the keystore API and matched by HMI hardware /
+serial). In particular, TCX parameter 14 (`BATTERY1_FIRMWARE`) is a **3-byte
+firmware version**, *not* key material — an earlier version of this library
+wrongly treated its response as a key.
+
+What the bike *does* provide during identification is the AES-CTR **IV**: the
+clear `SYSTEM_GET_NEW_VI` (`0x0A00`) response body carries the 16-byte IV.
+The session key is the backend key; the session IV is this per-connection IV.
+
 ### Key derivation
 
-The encryption key comes from the bike's `BTEncryptionInfo`, which is exchanged during identification step 4 (parameter ID 14 / `BATTERY1_FIRMWARE`). The derivation:
+The backend `BTEncryptionInfo.key` is a 64-character base64 string. Deriving
+the final 16-byte AES key from it:
 
-1. Start with a 64-character base64-encoded string from the bike
+1. Start with the 64-character base64-encoded string from the backend
 2. Base64-decode it (yields ~48 raw bytes)
 3. The first 16 bytes are an intermediate AES key
 4. The remaining bytes are AES-CTR decrypted using that intermediate key with a zero IV
@@ -309,29 +331,32 @@ def derive_key(base64_key: str) -> bytes:
 ## Identification handshake
 
 Before streaming telemetry, TCX2+ bikes require a multi-step identification
-sequence. Each step CRC-frames a 2-byte big-endian `BikeParameter` ID, writes
-the 20-byte frame without response to service 1 characteristic `0x0021`, and
-awaits the matching notification on `0x0011`.
+sequence. Each step CRC-frames a 2-byte big-endian **wire command id** (mapped
+from an app-level `BikeParameter` by generation/revision — see
+`specialized_turbo/wire_profiles.py`), writes the 20-byte frame without
+response to service 1 characteristic `0x0021`, and awaits the matching
+notification on `0x0011`. Correlation is by wire id (a NAK echoes it).
+
+Two steps are **clear** `0x0Axx` control frames; the rest are AES-CTR
+encrypted (clear 2-byte header, encrypted body) using the backend key and the
+IV installed in step 1.
 
 ### Full identification steps (new bike)
 
-| Step | Param ID | Name | Purpose |
-| --- | --- | --- | --- |
-| 1 | 300 | `SYSTEM_GET_NEW_VI` | Trigger identification from scan data |
-| 2 | 310 | `SYSTEM_HMI_PROTOCOL_VERSION` | Protocol version negotiation |
-| 3 | 363 | `SYSTEM_STATE` | System state (ready, sleeping, etc.) |
-| 4 | 14 | `BATTERY1_FIRMWARE` | Encryption key exchange |
-| 5 | 308 | `SYSTEM_HMI_HW_VERSION` | HMI hardware version |
-| 6 | 329 | `SYSTEM_MOTOR_TYPE` | Motor type |
-| 7 | 290 | `SYSTEM_EBIKE_SERIAL_NUMBER` | Serial / battery info |
+| Step | Param | Wire id | Clear/enc | Purpose |
+| --- | --- | --- | --- | --- |
+| 1 | `SYSTEM_GET_NEW_VI` (300) | `0x0A00` | clear | Request carries one zero byte; response body is the 16-byte AES-CTR **IV** |
+| 2 | `SYSTEM_HMI_PROTOCOL_VERSION` (310) | `0x0A01` | clear | Response carries BLE + USB revision bytes; the BLE revision + generation selects the `ProtocolRevision` |
+| 3 | `SYSTEM_STATE` (363) | `0x0801` | encrypted | System state (ready, sleeping, etc.) |
+| 4 | `BATTERY1_FIRMWARE` (14) | `0x05F3` | encrypted | 3-byte **firmware version** (not a key) |
+| 5 | `SYSTEM_HMI_HW_VERSION` (308) | `0x0807` | encrypted | HMI hardware version string |
+| 6 | `SYSTEM_MOTOR_TYPE` (329) | revision-specific | encrypted | Motor type (wire id varies by revision, e.g. TCX2 rev `0x12` → `0x08D2`) |
+| 7 | `SYSTEM_EBIKE_SERIAL_NUMBER` (290) | `0x0804` | encrypted | Serial number |
 
-### Short identification steps (reconnecting to known bike)
-
-| Step | Param ID | Name |
-| --- | --- | --- |
-| 1 | 300 | `SYSTEM_GET_NEW_VI` |
-| 2 | 363 | `SYSTEM_STATE` |
-| 3 | 14 | `BATTERY1_FIRMWARE` (encryption key) |
+The encryption key itself is **not** part of this sequence — it is fetched
+out-of-band from the account keystore (see *Key source* above). Step 1
+installs the per-connection IV; the combination is what enables the encrypted
+reads in steps 3–7.
 
 The identification result determines the bike type, which maps to a protocol generation:
 
