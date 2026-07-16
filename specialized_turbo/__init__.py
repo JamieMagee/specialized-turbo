@@ -1,13 +1,23 @@
 """
 specialized_turbo -- talk to Specialized Turbo e-bikes over BLE.
 
-Quick start::
+Quick start (TCX2+ bikes)::
 
     import asyncio
-    from specialized_turbo import SpecializedConnection, TelemetryMonitor
+    from specialized_turbo import (
+        SpecializedConnection,
+        TelemetryMonitor,
+        parse_bike_info,
+    )
+    from specialized_turbo.keystore import BikeEncryptionKey
 
     async def main():
-        async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
+        # ``bike_info`` comes from the BLE advertisement (parse_bike_info)
+        # and ``key`` from the Specialized account keystore -- a TCX2+ bike
+        # cannot be identified without both.
+        async with SpecializedConnection(
+            "DC:DD:BB:4A:D6:55", pin="946166", bike_info=info, key=key
+        ) as conn:
             monitor = TelemetryMonitor(conn)
             await monitor.start()
 
@@ -15,6 +25,10 @@ Quick start::
                 print(f"{msg.field_name} = {msg.converted_value} {msg.unit}")
 
     asyncio.run(main())
+
+``BikeEncryptionKey`` and the keystore models import without the optional
+``aiohttp`` dependency; only the network ``KeystoreClient`` needs the
+``keystore`` extra (``pip install "specialized-turbo[keystore]"``).
 """
 
 from __future__ import annotations
@@ -82,8 +96,40 @@ from .models import (
 )
 from .connection import (
     SpecializedConnection as SpecializedConnection,
+    UnsupportedTCXOperationError as UnsupportedTCXOperationError,
     scan_for_bikes as scan_for_bikes,
     find_bike_by_address as find_bike_by_address,
+)
+from .bike_info import (
+    BikeInfo as BikeInfo,
+    parse_bike_info as parse_bike_info,
+    ProtocolEncryptionMethod as ProtocolEncryptionMethod,
+)
+from .keystore.models import (
+    BikeEncryptionKey as BikeEncryptionKey,
+)
+from .wire_profiles import (
+    ProtocolRevision as ProtocolRevision,
+    TCXGeneration as TCXGeneration,
+    WireProfileError as WireProfileError,
+    UnmappedParameterError as UnmappedParameterError,
+)
+from .identification import (
+    TCXIdentification as TCXIdentification,
+    identify as identify,
+    parse_wire_message as parse_wire_message,
+    WireMessage as WireMessage,
+    IdentificationResult as IdentificationResult,
+    IdentificationPhase as IdentificationPhase,
+    IdentificationError as IdentificationError,
+    IncompleteBikeInfoError as IncompleteBikeInfoError,
+    UnsupportedGenerationError as UnsupportedGenerationError,
+    UnsupportedRevisionError as UnsupportedRevisionError,
+    MissingEncryptionKeyError as MissingEncryptionKeyError,
+    MalformedIVError as MalformedIVError,
+    MalformedProtocolResponseError as MalformedProtocolResponseError,
+    DecryptionError as DecryptionError,
+    IdentificationNakError as IdentificationNakError,
 )
 from .telemetry import (
     TelemetryMonitor as TelemetryMonitor,
@@ -123,6 +169,7 @@ from .session import (
 from .transport import (
     BLETraceEvent as BLETraceEvent,
     TCXNotificationTransport as TCXNotificationTransport,
+    TCXProtocolNotNegotiatedError as TCXProtocolNotNegotiatedError,
     TCXRequestTimeoutError as TCXRequestTimeoutError,
     TCXTransportDisconnectedError as TCXTransportDisconnectedError,
 )
@@ -200,8 +247,33 @@ __all__ = [
     "TelemetrySnapshot",
     # Connection
     "SpecializedConnection",
+    "UnsupportedTCXOperationError",
     "scan_for_bikes",
     "find_bike_by_address",
+    # Advertisement parsing / identification
+    "BikeInfo",
+    "parse_bike_info",
+    "ProtocolEncryptionMethod",
+    "BikeEncryptionKey",
+    "ProtocolRevision",
+    "TCXGeneration",
+    "WireProfileError",
+    "UnmappedParameterError",
+    "TCXIdentification",
+    "identify",
+    "parse_wire_message",
+    "WireMessage",
+    "IdentificationResult",
+    "IdentificationPhase",
+    "IdentificationError",
+    "IncompleteBikeInfoError",
+    "UnsupportedGenerationError",
+    "UnsupportedRevisionError",
+    "MissingEncryptionKeyError",
+    "MalformedIVError",
+    "MalformedProtocolResponseError",
+    "DecryptionError",
+    "IdentificationNakError",
     # Telemetry
     "TelemetryMonitor",
     "run_telemetry_session",
@@ -238,6 +310,7 @@ __all__ = [
     # TCX notification transport
     "BLETraceEvent",
     "TCXNotificationTransport",
+    "TCXProtocolNotNegotiatedError",
     "TCXRequestTimeoutError",
     "TCXTransportDisconnectedError",
     # Coordinator helpers

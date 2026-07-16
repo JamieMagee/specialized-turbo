@@ -22,14 +22,14 @@ from .models import TelemetrySnapshot
 from .protocol import parse_message, parse_tcx_message, ParsedMessage
 from .session import TCXSession
 from .transport import TCXRequestTimeoutError
-from .wire_profiles import ProtocolRevision
+from .wire_profiles import ProtocolRevision, UnmappedParameterError
 
 logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
 class RevisionAwareConnection(Protocol):
-    """Narrow interface a connection may satisfy to expose its negotiated
+    """Narrow interface a connection exposes to advertise its negotiated
     TCX protocol revision.
 
     :class:`TelemetryMonitor` only needs this one read-only property to
@@ -37,12 +37,12 @@ class RevisionAwareConnection(Protocol):
     .protocol.parse_tcx_message`) to profile-aware (:class:`ProtocolRevision`
     -> wire id) parsing of TCX notifications. Depending on this narrow
     structural protocol -- rather than importing a concrete connection
-    type's identification internals -- avoids a circular import with the
-    connection-layer work landing in parallel (identification-driven
-    revision negotiation isn't wired into :class:`SpecializedConnection`
-    yet). A connection that doesn't implement it is treated as
-    "revision unknown" and notification parsing falls back to the legacy
-    path; see :meth:`TelemetryMonitor._active_revision`.
+    type's identification internals -- keeps the telemetry layer decoupled
+    from the connection layer. :class:`SpecializedConnection` satisfies it
+    via its :attr:`~specialized_turbo.connection.SpecializedConnection.active_revision`
+    property. A connection that doesn't implement it (or returns ``None``)
+    is treated as "revision unknown" and notification parsing falls back to
+    the legacy path; see :meth:`TelemetryMonitor._active_revision`.
     """
 
     @property
@@ -103,7 +103,7 @@ class TelemetryMonitor:
         return self._nak_count
 
     def _active_revision(self) -> ProtocolRevision | None:
-        """Best-effort lookup of the connection's negotiated TCX revision.
+        """Best-effort, type-validated lookup of the connection's negotiated revision.
 
         Prefers an injected ``revision_accessor`` (useful for tests, or for
         callers that don't want their connection type to implement
@@ -112,14 +112,25 @@ class TelemetryMonitor:
         ``isinstance`` check, so this keeps working whether or not the
         connection type structurally satisfies the protocol.
 
-        Returns ``None`` if no revision is available (e.g. the current
-        :class:`SpecializedConnection`, until the parallel connection-layer
-        work exposes ``active_revision``), in which case notification
-        parsing falls back to the legacy, non-profile-aware path.
+        The result is validated: anything other than a
+        :class:`ProtocolRevision` (or ``None``) is rejected with a warning
+        and treated as "revision unknown", so a mistyped accessor or
+        connection attribute can never smuggle a bogus object into the
+        profile-aware wire-id resolution. ``None`` means notification parsing
+        falls back to the legacy, non-profile-aware path.
         """
         if self._revision_accessor is not None:
-            return self._revision_accessor()
-        return getattr(self._conn, "active_revision", None)
+            revision = self._revision_accessor()
+        else:
+            revision = getattr(self._conn, "active_revision", None)
+        if revision is None or isinstance(revision, ProtocolRevision):
+            return revision
+        logger.warning(
+            "Ignoring active_revision of unexpected type %s (expected "
+            "ProtocolRevision or None); falling back to legacy parsing",
+            type(revision).__name__,
+        )
+        return None
 
     async def start(self) -> None:
         """Subscribe to bike notifications and begin decoding."""
@@ -239,31 +250,50 @@ class TelemetryMonitor:
     async def _prime_tcx_snapshot(self) -> None:
         """Query the initial TCX values through the notification transport.
 
-        Priming still resolves parameters through
-        :class:`SpecializedConnection`'s legacy ``request_tcx_value`` (which
-        assumes wire id == ``BikeParameter`` enum value): the connection
-        layer doesn't yet expose the wire-aware ``TCXNotificationTransport``
-        needed to prime profile-aware via ``coordinator_helpers.poll_tcx``
-        (that lands with the parallel connection-layer work). If the active
-        revision is already known, this is logged clearly so it isn't
-        mistaken for genuine profile-aware priming -- unlike priming, live
-        notification parsing (see ``_notification_handler``) is already
-        profile-aware whenever a revision is available.
+        Profile-aware: each :data:`TCX_POLL_PARAMS` entry is requested via
+        :meth:`SpecializedConnection.request_tcx_parameter`, which resolves
+        the app-level ``BikeParameter`` to a wire command id through the
+        negotiated :class:`ProtocolRevision` -- the same revision the live
+        ``_notification_handler`` uses to decode responses. The request and
+        notification sides therefore switch together: when a revision is
+        available both are profile-aware; when it is not, priming is skipped
+        entirely (the deprecated raw enum-ID path is never used) and the
+        snapshot is populated by live notifications alone.
+
+        Per-parameter failures are contained: a parameter with no wire id
+        for this revision is skipped; a request timeout stops priming
+        (matching the previous behaviour) without aborting ``start()``.
         """
-        if self._active_revision() is not None:
+        revision = self._active_revision()
+        if revision is None:
             logger.info(
-                "TCX protocol revision known, but initial snapshot priming "
-                "is still legacy (enum-ID) until the connection exposes a "
-                "wire-aware transport; live notifications are already "
-                "parsed profile-aware"
+                "No active TCX protocol revision available; skipping initial "
+                "snapshot priming (cannot address parameters by wire id "
+                "without a negotiated revision). Live notifications will "
+                "populate the snapshot as they arrive."
             )
+            return
+        logger.info(
+            "Priming TCX snapshot profile-aware (BikeParameter -> wire id) "
+            "for %s revision 0x%02x",
+            revision.generation.name,
+            revision.revision,
+        )
         for param in TCX_POLL_PARAMS:
             try:
-                await self._conn.request_tcx_value(int(param))
+                await self._conn.request_tcx_parameter(param)
+            except UnmappedParameterError:
+                logger.debug(
+                    "No wire id for %s on %s revision 0x%02x; skipping prime",
+                    param.name,
+                    revision.generation.name,
+                    revision.revision,
+                )
+                continue
             except TCXRequestTimeoutError:
                 logger.warning(
-                    "Timed out while priming TCX telemetry at parameter %d",
-                    int(param),
+                    "Timed out while priming TCX telemetry at parameter %s",
+                    param.name,
                 )
                 break
 

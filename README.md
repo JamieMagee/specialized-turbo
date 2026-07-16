@@ -12,14 +12,25 @@ pip install specialized-turbo
 
 ## Quick start
 
-### Stream telemetry
+> **TCX2+ bikes (Vado/Levo/Creo SL, etc.) require identification.** Pass the
+> parsed advertisement (`bike_info`, from `parse_bike_info`) and the bike's
+> AES key (`key`, a `BikeEncryptionKey` fetched out-of-band from the
+> Specialized account keystore) so the connection can run the encrypted
+> identification handshake and negotiate the protocol revision. TCU1 bikes
+> (2018 Levo) need neither — just the address and PIN.
+
+### Stream telemetry (TCX2+)
 
 ```python
 import asyncio
 from specialized_turbo import SpecializedConnection, TelemetryMonitor
+from specialized_turbo import parse_bike_info, BikeEncryptionKey
 
 async def main():
-    async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
+    # bike_info comes from the BLE advertisement; key from your account.
+    async with SpecializedConnection(
+        "DC:DD:BB:4A:D6:55", pin="946166", bike_info=info, key=key
+    ) as conn:
         monitor = TelemetryMonitor(conn)
         await monitor.start()
 
@@ -32,7 +43,9 @@ asyncio.run(main())
 ### Read the snapshot
 
 ```python
-async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
+async with SpecializedConnection(
+    "DC:DD:BB:4A:D6:55", pin="946166", bike_info=info, key=key
+) as conn:
     monitor = TelemetryMonitor(conn)
     await monitor.start()
     await asyncio.sleep(5)
@@ -45,12 +58,15 @@ async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
     print(f"Assist: {snap.motor.assist_level}")
 ```
 
-### Query a single value
+### Query a single value (TCU1)
 
 ```python
 from specialized_turbo import SpecializedConnection, Sender, BatteryChannel
+from specialized_turbo import BLEProfile
 
-async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
+async with SpecializedConnection(
+    "DC:DD:BB:4A:D6:55", pin="946166", generation=BLEProfile.TCU1
+) as conn:
     msg = await conn.request_value(Sender.BATTERY, BatteryChannel.CHARGE_PERCENT)
     print(f"Battery: {msg.converted_value}%")
 ```
@@ -58,14 +74,24 @@ async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
 ### Write commands
 
 ```python
-async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
+async with SpecializedConnection(
+    "DC:DD:BB:4A:D6:55", pin="946166", bike_info=info, key=key
+) as conn:
     await conn.set_assist_level(2)          # TRAIL
     await conn.set_acceleration(50.0)       # 50%
-    await conn.set_shuttle(25)
     await conn.set_assist_percentage(0, 35) # ECO = 35%
+    # set_shuttle(...) is TCU1-only: no verified TCX2+ equivalent.
 ```
 
 ## CLI
+
+> **CLI TCX2+ support is limited.** The CLI cannot yet fetch a bike's AES key
+> from the Specialized account keystore, so commands that need the encrypted
+> identification handshake (`telemetry`, `capture`, and `read` of a TCX2+
+> field) fail with an explicit message on TCX2+ bikes. `scan`, `services`,
+> `read list`/`write list`, and TCU1 `read`/`write` work today. Use the
+> library API (`SpecializedConnection` with `bike_info=` and `key=`) for
+> TCX2+ telemetry and parameter access.
 
 Scan for bikes:
 

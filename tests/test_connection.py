@@ -13,6 +13,7 @@ would.
 from __future__ import annotations
 
 import logging
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -22,7 +23,10 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 
 import specialized_turbo.connection as connection_module
 from specialized_turbo.bike_info import BikeInfo
-from specialized_turbo.connection import SpecializedConnection
+from specialized_turbo.connection import (
+    SpecializedConnection,
+    UnsupportedTCXOperationError,
+)
 from specialized_turbo.framing import is_nak_packet
 from specialized_turbo.identification import (
     IncompleteBikeInfoError,
@@ -640,8 +644,34 @@ async def test_tcu1_request_read_is_unchanged(
     await connection.disconnect()
 
 
+@pytest.mark.asyncio
+async def test_tcu1_convenience_writes_unchanged(
+    fake_bleak: type[_FakeBleakClient],
+) -> None:
+    """TCU1 convenience writers keep the bare sender/channel/value format."""
+    connection = SpecializedConnection(
+        "AA:BB:CC:DD:EE:FF",
+        generation=BLEProfile.TCU1,
+    )
+    await connection.connect()
+    client = fake_bleak.instance
+    assert client is not None
+
+    await connection.set_assist_level(2)
+    assert client.writes[-1][1] == bytes([0x01, 0x05, 0x02])
+
+    await connection.set_assist_percentage(1, 60)  # TRAIL -> channel 0x04
+    assert client.writes[-1][1] == bytes([0x02, 0x04, 60])
+
+    await connection.set_shuttle(50)  # TCU1 supports shuttle
+    assert client.writes[-1][1] == bytes([0x01, 0x15, 50])
+
+    await connection.disconnect()
+
+
 # ---------------------------------------------------------------------------
-# TelemetryMonitor still primes without GATT reads (legacy raw-wire path).
+# TelemetryMonitor primes profile-aware (no GATT reads); the connection's
+# active_revision drives both priming and live notification decoding.
 # ---------------------------------------------------------------------------
 
 
@@ -661,6 +691,150 @@ async def test_telemetry_monitor_primes_tcx_snapshot_without_reads(
     assert client.reads == []
 
     await monitor.stop()
+    await connection.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_active_revision_aliases_protocol_revision(
+    fake_bleak: type[_FakeBleakClient],
+) -> None:
+    connection = _connection()
+    await connection.connect()
+
+    expected = ProtocolRevision(GENERATION, REVISION)
+    assert connection.active_revision == expected
+    # protocol_revision is retained as an alias of the canonical accessor.
+    assert connection.protocol_revision == connection.active_revision
+
+    await connection.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_telemetry_primes_and_decodes_soc_profile_aware(
+    fake_bleak: type[_FakeBleakClient],
+) -> None:
+    """AES connect -> active revision -> mapped priming + notification (SOC 0x0500)."""
+    connection = _connection()
+    await connection.connect()
+    client = fake_bleak.instance
+    assert client is not None
+    monitor = TelemetryMonitor(connection)
+
+    # The monitor reads the connection's negotiated revision structurally.
+    assert monitor._active_revision() == ProtocolRevision(GENERATION, REVISION)
+
+    await monitor.start()
+
+    # Priming addressed SOC by its real wire id 0x0500 -- never the raw enum
+    # id (26), which is not a valid TCX2 wire id.
+    assert 0x0500 in client.bike.requests
+    assert int(BikeParameter.BATTERY1_STATE_OF_CHARGE) not in client.bike.requests
+    # The healthy bike's primed SOC body is 49.
+    assert monitor.snapshot.battery.charge_pct == 49
+
+    # A live SOC notification (wire 0x0500 = 61) decodes profile-aware.
+    packet = connection.session.pack(encode_parameter_id(0x0500) + bytes([61]))
+    client.notify(BLEServiceID.DATA, packet)
+    assert monitor.snapshot.battery.charge_pct == 61
+    assert client.reads == []
+
+    await monitor.stop()
+    await connection.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_no_deprecated_raw_calls_during_connect_and_telemetry(
+    fake_bleak: type[_FakeBleakClient],
+) -> None:
+    """Connect + prime + decode must not touch the deprecated raw enum-id path."""
+    connection = _connection()
+    monitor = TelemetryMonitor(connection)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        await connection.connect()
+        await monitor.start()
+        client = fake_bleak.instance
+        assert client is not None
+        packet = connection.session.pack(encode_parameter_id(0x0500) + bytes([61]))
+        client.notify(BLEServiceID.DATA, packet)
+        await monitor.stop()
+
+    assert monitor.snapshot.battery.charge_pct == 61
+    await connection.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# TCX convenience writers map through the correct BikeParameter wire ids.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tcx_convenience_writes_map_to_wire_ids(
+    fake_bleak: type[_FakeBleakClient],
+) -> None:
+    connection = _connection()
+    await connection.connect()
+    client = fake_bleak.instance
+    assert client is not None
+    data_service = get_service_characteristics(BLEProfile.TCX, BLEServiceID.DATA)
+
+    def last_data_write() -> bytes:
+        characteristic, packet, response = client.writes[-1]
+        assert characteristic == data_service.write
+        assert response is False
+        return connection.session.unpack(packet)
+
+    # assist level -> MOTOR_ACTIVE_TRAVEL_MODE (0x07fa)
+    await connection.set_assist_level(2)
+    assert last_data_write()[:3] == bytes([0x07, 0xFA, 0x02])
+
+    # profile scaling ECO/TRAIL/TURBO -> 0x07f2 / 0x07f1 / 0x07f0
+    await connection.set_assist_percentage(0, 55)
+    assert last_data_write()[:3] == bytes([0x07, 0xF2, 55])
+    await connection.set_assist_percentage(1, 60)
+    assert last_data_write()[:3] == bytes([0x07, 0xF1, 60])
+    await connection.set_assist_percentage(2, 70)
+    assert last_data_write()[:3] == bytes([0x07, 0xF0, 70])
+
+    # acceleration -> MOTOR_ACCELERATION_RESPONSE (0x0711); 50% -> 6000 LE
+    await connection.set_acceleration(50)
+    unpacked = last_data_write()
+    assert unpacked[:2] == bytes([0x07, 0x11])
+    assert unpacked[2:4] == (6000).to_bytes(2, "little")
+
+    await connection.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_tcx_set_shuttle_raises_unsupported(
+    fake_bleak: type[_FakeBleakClient],
+) -> None:
+    connection = _connection()
+    await connection.connect()
+    client = fake_bleak.instance
+    assert client is not None
+    writes_before = len(client.writes)
+
+    with pytest.raises(UnsupportedTCXOperationError, match="shuttle"):
+        await connection.set_shuttle(50)
+
+    # No wire write was emitted for the unsupported operation.
+    assert len(client.writes) == writes_before
+
+    await connection.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_tcx_set_assist_percentage_rejects_bad_level_index(
+    fake_bleak: type[_FakeBleakClient],
+) -> None:
+    connection = _connection()
+    await connection.connect()
+
+    with pytest.raises(ValueError, match="level_index"):
+        await connection.set_assist_percentage(3, 50)
+
     await connection.disconnect()
 
 

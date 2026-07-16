@@ -47,6 +47,16 @@ from .wire_profiles import ProtocolRevision
 
 logger = logging.getLogger(__name__)
 
+
+class UnsupportedTCXOperationError(RuntimeError):
+    """A TCU1 convenience write has no verified TCX2+ ``BikeParameter`` equivalent.
+
+    Raised instead of guessing a wire id for an operation (e.g. shuttle)
+    that has no confirmed mapping on the TCX2+ protocol, so a TCX write can
+    never silently address the wrong parameter.
+    """
+
+
 #: Sentinel used when no ``BikeInfo`` is supplied to :class:`SpecializedConnection`.
 #: ``complete=False`` routes straight into :class:`~specialized_turbo.
 #: identification.IncompleteBikeInfoError` instead of an ``AttributeError``.
@@ -103,14 +113,21 @@ class SpecializedConnection:
     """
     Async BLE connection to a Specialized Turbo bike.
 
-    Usage::
+    TCX2+ bikes require the pre-connect advertisement parse (*bike_info*, see
+    :func:`specialized_turbo.bike_info.parse_bike_info`) and the AES key
+    fetched out-of-band from the account keystore (*key*, a
+    :class:`~specialized_turbo.keystore.models.BikeEncryptionKey`) so the
+    official identification handshake can run and negotiate the protocol
+    revision. TCU1 bikes need neither. Usage::
 
-        async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin=946166) as conn:
+        async with SpecializedConnection(
+            "DC:DD:BB:4A:D6:55", pin="946166", bike_info=info, key=key
+        ) as conn:
             await conn.subscribe_notifications(my_callback)
             await asyncio.sleep(30)
 
-    Handles connecting, BLE pairing (passkey entry), subscribing to
-    telemetry notifications, and parameter queries.
+    Handles connecting, BLE pairing (passkey entry), the TCX identification
+    handshake, subscribing to telemetry notifications, and parameter queries.
     """
 
     def __init__(
@@ -314,13 +331,28 @@ class SpecializedConnection:
         return self._session
 
     @property
-    def protocol_revision(self) -> ProtocolRevision | None:
+    def active_revision(self) -> ProtocolRevision | None:
         """The active TCX generation/revision, negotiated during identification.
 
+        This is the canonical accessor consumers should read (e.g.
+        :class:`~specialized_turbo.telemetry.TelemetryMonitor`, via the
+        :class:`~specialized_turbo.telemetry.RevisionAwareConnection`
+        structural protocol) to know which wire-id map is in effect -- see
+        :mod:`specialized_turbo.wire_profiles`.
+
         Read-only: ``None`` for a TCU1 connection, or before a TCX
-        identification handshake has completed. Consumers should use this
-        (rather than assuming a generation/revision) to know which wire-id
-        map is in effect -- see :mod:`specialized_turbo.wire_profiles`.
+        identification handshake has completed.
+        """
+        return self._protocol_revision
+
+    @property
+    def protocol_revision(self) -> ProtocolRevision | None:
+        """Alias of :attr:`active_revision`.
+
+        Kept for symmetry with
+        :attr:`~specialized_turbo.identification.IdentificationResult.protocol_revision`
+        and :attr:`~specialized_turbo.transport.TCXNotificationTransport.protocol_revision`.
+        New code should prefer :attr:`active_revision`.
         """
         return self._protocol_revision
 
@@ -527,6 +559,15 @@ class SpecializedConnection:
         if self._generation == BLEProfile.TCX:
             if self._tcx_transport is None:
                 raise RuntimeError("TCX transport is not initialized")
+            warnings.warn(
+                "write_command() on a TCX connection treats data as an "
+                "already wire-ready [wire_id_be, value...] payload and is "
+                "deprecated; use write_tcx_parameter(BikeParameter, value), "
+                "which resolves the wire id through the negotiated "
+                "ProtocolRevision. (TCU1 callers are unaffected.)",
+                DeprecationWarning,
+                stacklevel=2,
+            )
             packed = self._session.pack(data)
             logger.debug("TCX write command: %s", packed.hex())
             from .protocol import BLEServiceID
@@ -558,8 +599,27 @@ class SpecializedConnection:
             )
         await self._tcx_transport.write_bike_parameter(param, data)
 
+    #: TCX2+ profile-scaling parameters for ECO/TRAIL/TURBO, indexed to match
+    #: :meth:`set_assist_percentage`'s ``level_index`` (0=ECO, 1=TRAIL, 2=TURBO).
+    _TCX_PROFILE_SCALING = (
+        BikeParameter.MOTOR_PROFILE_SCALING_ECO_SETTING,
+        BikeParameter.MOTOR_PROFILE_SCALING_TRAIL_SETTING,
+        BikeParameter.MOTOR_PROFILE_SCALING_TURBO_SETTING,
+    )
+
     async def set_assist_level(self, level: int) -> None:
-        """Set the assist level (0=OFF, 1=ECO, 2=TRAIL, 3=TURBO)."""
+        """Set the assist level (0=OFF, 1=ECO, 2=TRAIL, 3=TURBO).
+
+        On TCX2+ this maps to ``MOTOR_ACTIVE_TRAVEL_MODE`` through the
+        negotiated protocol revision; on TCU1 it keeps the legacy
+        sender/channel write unchanged.
+        """
+        if self._generation == BLEProfile.TCX:
+            await self.write_tcx_parameter(
+                BikeParameter.MOTOR_ACTIVE_TRAVEL_MODE, bytes([level])
+            )
+            return
+
         from .protocol import build_write_command
 
         await self.write_command(
@@ -567,7 +627,23 @@ class SpecializedConnection:
         )
 
     async def set_assist_percentage(self, level_index: int, value: int) -> None:
-        """Set assist percentage for a level (level_index: 0=ECO, 1=TRAIL, 2=TURBO; value: 0-100)."""
+        """Set assist percentage for a level (level_index: 0=ECO, 1=TRAIL, 2=TURBO; value: 0-100).
+
+        On TCX2+ this maps to the matching ``MOTOR_PROFILE_SCALING_*_SETTING``
+        parameter through the negotiated protocol revision; on TCU1 it keeps
+        the legacy sender/channel write unchanged.
+        """
+        if self._generation == BLEProfile.TCX:
+            try:
+                param = self._TCX_PROFILE_SCALING[level_index]
+            except IndexError:
+                raise ValueError(
+                    f"level_index must be 0 (ECO), 1 (TRAIL), or 2 (TURBO), "
+                    f"got {level_index}"
+                ) from None
+            await self.write_tcx_parameter(param, bytes([value]))
+            return
+
         from .protocol import build_write_command
 
         await self.write_command(
@@ -575,16 +651,39 @@ class SpecializedConnection:
         )
 
     async def set_acceleration(self, percent: float) -> None:
-        """Set acceleration sensitivity (0-100%)."""
+        """Set acceleration sensitivity (0-100%).
+
+        On TCX2+ this maps to ``MOTOR_ACCELERATION_RESPONSE`` through the
+        negotiated protocol revision (same ``percent * 60 + 3000`` wire
+        encoding); on TCU1 it keeps the legacy sender/channel write unchanged.
+        """
+        raw = int(percent * 60 + 3000)
+        if self._generation == BLEProfile.TCX:
+            await self.write_tcx_parameter(
+                BikeParameter.MOTOR_ACCELERATION_RESPONSE, raw.to_bytes(2, "little")
+            )
+            return
+
         from .protocol import build_write_command
 
-        raw = int(percent * 60 + 3000)
         await self.write_command(
             build_write_command(0x02, 0x07, raw.to_bytes(2, "little"))
         )
 
     async def set_shuttle(self, value: int) -> None:
-        """Set shuttle value (0-100)."""
+        """Set shuttle value (0-100).
+
+        TCU1 only: there is no verified TCX2+ ``BikeParameter`` equivalent
+        for the TCU1 shuttle write, so this raises
+        :class:`UnsupportedTCXOperationError` on a TCX connection rather than
+        guessing a wire id.
+        """
+        if self._generation == BLEProfile.TCX:
+            raise UnsupportedTCXOperationError(
+                "set_shuttle has no verified TCX2+ BikeParameter equivalent; "
+                "it is supported on TCU1 only"
+            )
+
         from .protocol import build_write_command
 
         await self.write_command(build_write_command(0x01, 0x15, bytes([value])))

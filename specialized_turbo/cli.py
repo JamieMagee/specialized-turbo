@@ -18,9 +18,11 @@ import time
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
 from .connection import scan_for_bikes, SpecializedConnection
+from .identification import IdentificationError
 from .parameters import all_tcx_fields
 from .protocol import (
     all_field_defs,
+    BLEProfile,
 )
 from .telemetry import run_telemetry_session
 from .transport import BLETraceEvent
@@ -134,15 +136,30 @@ async def _cmd_read(args: argparse.Namespace) -> None:
         print("Use 'read list' to see available fields.")
         sys.exit(1)
 
+    if tcx_param_id is not None:
+        # A TCX2+ read must go through the identification handshake (which
+        # resolves the app-level BikeParameter to a revision-specific wire
+        # id). That needs the bike's advertisement (BikeInfo) and its AES key
+        # from the account keystore -- neither of which the CLI can fetch
+        # yet. Fail explicitly instead of silently addressing a raw enum id.
+        print(
+            f"Reading TCX2+ field '{field_name}' is not supported by the CLI "
+            "yet: it requires an identification handshake using the bike's "
+            "advertisement (BikeInfo) and its AES key from the Specialized "
+            "account keystore. Use the library API instead "
+            "(SpecializedConnection with bike_info= and key=, then "
+            "request_tcx_parameter)."
+        )
+        sys.exit(1)
+
+    assert tcu1_key is not None
+    sender, channel = tcu1_key
     print(f"Connecting to {args.address} to read '{field_name}' ...")
 
-    async with SpecializedConnection(args.address, pin=args.pin) as conn:
-        if tcx_param_id is not None:
-            msg = await conn.request_tcx_value(tcx_param_id)
-        else:
-            assert tcu1_key is not None
-            sender, channel = tcu1_key
-            msg = await conn.request_value(sender, channel)
+    async with SpecializedConnection(
+        args.address, pin=args.pin, generation=BLEProfile.TCU1
+    ) as conn:
+        msg = await conn.request_value(sender, channel)
         if args.format == "json":
             if msg.nak_reason is not None:
                 print(
@@ -224,7 +241,13 @@ async def _cmd_write(args: argparse.Namespace) -> None:
 
     print(f"Connecting to {args.address} to write '{field_name}' = {raw_value} ...")
 
-    async with SpecializedConnection(args.address, pin=args.pin) as conn:
+    # ``write list`` fields come from the TCU1 field table, so drive the
+    # write over the TCU1 profile (no identification handshake needed). A
+    # TCX2+ write must instead go through the library API's
+    # write_tcx_parameter with a fully identified connection.
+    async with SpecializedConnection(
+        args.address, pin=args.pin, generation=BLEProfile.TCU1
+    ) as conn:
         await conn.write_command(command)
         print(
             f"Wrote {field_name} = {raw_value} (raw: {wire_value}, bytes: {command.hex()})"
@@ -386,6 +409,19 @@ def main(argv: list[str] | None = None) -> None:
         asyncio.run(coro)
     except KeyboardInterrupt:
         print("\nInterrupted.")
+    except IdentificationError as exc:
+        # A TCX2+ command reached the identification handshake but could not
+        # complete it (typically no BikeInfo/key). Surface a clear, typed
+        # failure instead of an opaque traceback or AttributeError.
+        print(f"\nError: {exc}")
+        print(
+            "TCX2+ bikes require an identification handshake using the bike's "
+            "advertisement (BikeInfo) and its AES key from the Specialized "
+            "account keystore. The CLI cannot fetch these yet, so connecting "
+            "to a TCX bike is not supported from the CLI. Use the library API "
+            "(SpecializedConnection with bike_info= and key=)."
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

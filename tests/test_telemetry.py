@@ -1,17 +1,20 @@
 """
 Unit tests for ``TelemetryMonitor``'s profile-aware TCX notification
-handling.
+handling and priming.
 
-A duck-typed fake stands in for ``SpecializedConnection`` (which this
-module deliberately doesn't touch -- its identification/revision-negotiation
-story is landing in parallel).  Two fake connection variants exercise both
-sides of ``TelemetryMonitor._active_revision``'s narrow lookup:
+A duck-typed fake stands in for ``SpecializedConnection``. Two fake
+connection variants exercise both sides of
+``TelemetryMonitor._active_revision``'s narrow, type-validated lookup:
 
-- one with no ``active_revision`` attribute at all (today's
-  ``SpecializedConnection``) -- notifications fall back to the legacy,
-  non-profile-aware parse.
+- one with no ``active_revision`` attribute at all -- notifications fall
+  back to the legacy, non-profile-aware parse and priming is skipped.
 - one that implements :class:`~specialized_turbo.telemetry
-  .RevisionAwareConnection` -- notifications are parsed profile-aware.
+  .RevisionAwareConnection` (as the real ``SpecializedConnection`` now does)
+  -- notifications are parsed profile-aware and priming addresses each poll
+  parameter through the revision-aware ``request_tcx_parameter``.
+
+The fake's ``request_tcx_value`` deliberately raises: priming (and every
+other live path) must never fall back to the deprecated raw enum-id call.
 """
 
 from __future__ import annotations
@@ -24,12 +27,17 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 
 from specialized_turbo.connection import SpecializedConnection
 from specialized_turbo.coordinator_helpers import TCX_POLL_PARAMS
+from specialized_turbo.identification import WireMessage
 from specialized_turbo.parameters import BikeParameter, encode_parameter_id
 from specialized_turbo.protocol import BatteryChannel, ParsedMessage, Sender
 from specialized_turbo.session import ProtocolSession, TCU1Session, TCXSession
 from specialized_turbo.telemetry import RevisionAwareConnection, TelemetryMonitor
 from specialized_turbo.transport import NotificationCallback, TCXRequestTimeoutError
-from specialized_turbo.wire_profiles import ProtocolRevision, TCXGeneration
+from specialized_turbo.wire_profiles import (
+    ProtocolRevision,
+    TCXGeneration,
+    UnmappedParameterError,
+)
 
 KEY_RAW = b"\x11" * 16
 IV = b"\x22" * 16
@@ -52,8 +60,9 @@ class _FakeConnection:
     """Duck-typed stand-in exposing only what ``TelemetryMonitor`` needs."""
 
     session: ProtocolSession
-    requested_params: list[int] = field(default_factory=list)
+    requested_params: list[BikeParameter] = field(default_factory=list)
     timeout_after: int | None = None
+    unmapped: set[BikeParameter] = field(default_factory=set)
     _callback: NotificationCallback | None = field(default=None, init=False)
 
     async def subscribe_notifications(self, callback: NotificationCallback) -> None:
@@ -62,19 +71,23 @@ class _FakeConnection:
     async def unsubscribe_notifications(self) -> None:
         self._callback = None
 
-    async def request_tcx_value(self, param_id: int) -> ParsedMessage:
-        self.requested_params.append(param_id)
+    async def request_tcx_parameter(
+        self, param: BikeParameter, *, timeout: float | None = None
+    ) -> WireMessage:
+        """Profile-aware read used by ``_prime_tcx_snapshot``."""
+        if param in self.unmapped:
+            raise UnmappedParameterError(param.name)
+        self.requested_params.append(param)
         if self.timeout_after is not None and len(self.requested_params) > (
             self.timeout_after
         ):
-            raise TCXRequestTimeoutError(param_id, 0.001)
-        return ParsedMessage(
-            sender=0,
-            channel=0,
-            raw_value=0,
-            converted_value=None,
-            field_name=None,
-            unit="",
+            raise TCXRequestTimeoutError(int(param), 0.001)
+        return WireMessage(wire_id=int(param), parameter=param, data=b"", value=None)
+
+    async def request_tcx_value(self, param_id: int) -> ParsedMessage:
+        """Deprecated raw path -- must never be reached from live code."""
+        raise AssertionError(
+            "TelemetryMonitor must not use the deprecated raw request_tcx_value"
         )
 
     def notify(self, data: bytes) -> None:
@@ -232,24 +245,43 @@ class TestInjectableRevisionAccessor:
         assert monitor.snapshot.battery.charge_pct == 12
         await monitor.stop()
 
+    async def test_wrong_type_is_rejected_with_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A non-ProtocolRevision value is ignored, not passed to wire lookup."""
+        conn = _FakeConnection(session=TCXSession())
+        monitor = TelemetryMonitor(
+            cast(SpecializedConnection, conn),
+            revision_accessor=lambda: cast(ProtocolRevision, "not-a-revision"),
+        )
+
+        with caplog.at_level("WARNING"):
+            assert monitor._active_revision() is None
+
+        assert any("unexpected type" in r.message for r in caplog.records)
+
 
 # ---------------------------------------------------------------------------
-# Initial snapshot priming (requirement 5)
+# Initial snapshot priming (requirements 2 & 5): profile-aware, atomic switch
 # ---------------------------------------------------------------------------
 
 
 class TestPrimeTcxSnapshot:
-    async def test_primes_every_poll_param_through_legacy_request(self) -> None:
-        conn = _FakeConnection(session=TCXSession())
+    async def test_primes_every_poll_param_profile_aware(self) -> None:
+        conn = _FakeRevisionAwareConnection(session=TCXSession(), revision=_revision())
         monitor = TelemetryMonitor(cast(SpecializedConnection, conn))
 
         await monitor.start()
 
-        assert conn.requested_params == [int(p) for p in TCX_POLL_PARAMS]
+        # Priming addresses each poll parameter by BikeParameter (resolved to
+        # a wire id inside request_tcx_parameter), never the raw enum id.
+        assert conn.requested_params == list(TCX_POLL_PARAMS)
         await monitor.stop()
 
     async def test_priming_stops_on_first_timeout(self) -> None:
-        conn = _FakeConnection(session=TCXSession(), timeout_after=2)
+        conn = _FakeRevisionAwareConnection(
+            session=TCXSession(), revision=_revision(), timeout_after=2
+        )
         monitor = TelemetryMonitor(cast(SpecializedConnection, conn))
 
         await monitor.start()
@@ -257,7 +289,30 @@ class TestPrimeTcxSnapshot:
         assert len(conn.requested_params) == 3  # 2 ok + the one that times out
         await monitor.stop()
 
-    async def test_reports_priming_is_still_legacy_when_revision_known(
+    async def test_unmapped_parameter_is_skipped_not_fatal(self) -> None:
+        first = TCX_POLL_PARAMS[0]
+        conn = _FakeRevisionAwareConnection(
+            session=TCXSession(), revision=_revision(), unmapped={first}
+        )
+        monitor = TelemetryMonitor(cast(SpecializedConnection, conn))
+
+        await monitor.start()
+
+        assert first not in conn.requested_params
+        assert conn.requested_params == [p for p in TCX_POLL_PARAMS if p != first]
+        await monitor.stop()
+
+    async def test_no_priming_without_revision(self) -> None:
+        """Without a revision, priming is skipped -- never the raw enum path."""
+        conn = _FakeConnection(session=TCXSession())  # no active_revision
+        monitor = TelemetryMonitor(cast(SpecializedConnection, conn))
+
+        await monitor.start()
+
+        assert conn.requested_params == []
+        await monitor.stop()
+
+    async def test_reports_priming_is_profile_aware_when_revision_known(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         conn = _FakeRevisionAwareConnection(session=TCXSession(), revision=_revision())
@@ -266,7 +321,7 @@ class TestPrimeTcxSnapshot:
         with caplog.at_level("INFO"):
             await monitor.start()
 
-        assert any("priming is still legacy" in r.message for r in caplog.records)
+        assert any("profile-aware" in r.message for r in caplog.records)
         await monitor.stop()
 
 
