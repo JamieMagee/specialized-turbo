@@ -44,10 +44,10 @@ jobs:
         run: uv sync --extra dev
 
       - name: Check formatting
-        run: uvx ruff format --check .
+        run: uvx --from ruff==0.15.21 ruff format --check .
 
       - name: Lint
-        run: uvx ruff check .
+        run: uvx --from ruff==0.15.21 ruff check .
 
       - name: Type check
         run: uvx ty check
