@@ -10,10 +10,9 @@ Android app (``com.specialized.turboconnect.model.BikeParameter``).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
-from collections.abc import Callable
-
 
 # ---------------------------------------------------------------------------
 # BikeParameter enum — all 352 known parameter IDs

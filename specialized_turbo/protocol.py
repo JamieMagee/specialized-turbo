@@ -14,9 +14,9 @@ only the BLE UUIDs and advertisement data differ.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
-from collections.abc import Callable
 from typing import NamedTuple
 
 # ---------------------------------------------------------------------------

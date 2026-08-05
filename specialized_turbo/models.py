@@ -8,16 +8,17 @@ into a snapshot of the bike's current state.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field, fields as dc_fields
+from dataclasses import dataclass, field
+from dataclasses import fields as dc_fields
 from typing import Any, ClassVar
 
 from .protocol import (
     AssistLevel,
+    BatteryChannel,
+    BikeSettingsChannel,
+    MotorChannel,
     ParsedMessage,
     Sender,
-    BatteryChannel,
-    MotorChannel,
-    BikeSettingsChannel,
 )
 
 
@@ -260,9 +261,8 @@ class TelemetrySnapshot:
         elif sender == Sender.MOTOR:
             if self.motor.update(channel, value):
                 return
-        elif sender == Sender.BIKE_SETTINGS:
-            if self.settings.update(channel, value):
-                return
+        elif sender == Sender.BIKE_SETTINGS and self.settings.update(channel, value):
+            return
 
         # Fall through to field-name routing (TCX2+ path)
         if msg.field_name is not None:

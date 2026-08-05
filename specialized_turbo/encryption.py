@@ -33,9 +33,7 @@ def is_encryptable(data: bytes | bytearray) -> bool:
         return False
     if len(data) == 1 and data[0] == NAK_BYTE:
         return False
-    if len(data) >= 2 and data[:2] == _CLEAR_PREFIX:
-        return False
-    return True
+    return len(data) < 2 or data[:2] != _CLEAR_PREFIX
 
 
 def _aes_ctr_crypt(key: bytes, iv: bytes, data: bytes) -> bytes:

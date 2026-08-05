@@ -18,6 +18,7 @@ pip install specialized-turbo
 import asyncio
 from specialized_turbo import SpecializedConnection, TelemetryMonitor
 
+
 async def main():
     async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
         monitor = TelemetryMonitor(conn)
@@ -25,6 +26,7 @@ async def main():
 
         async for msg in monitor.stream():
             print(f"{msg.field_name} = {msg.converted_value} {msg.unit}")
+
 
 asyncio.run(main())
 ```
@@ -40,7 +42,9 @@ async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
     snap = monitor.snapshot
     print(f"Speed: {snap.motor.speed_kmh} km/h")
     print(f"Battery: {snap.battery.charge_pct}%")
-    print(f"Power: {snap.motor.rider_power_w} W (rider) + {snap.motor.motor_power_w} W (motor)")
+    print(
+        f"Power: {snap.motor.rider_power_w} W (rider) + {snap.motor.motor_power_w} W (motor)"
+    )
     print(f"Cadence: {snap.motor.cadence_rpm} RPM")
     print(f"Assist: {snap.motor.assist_level}")
 ```
@@ -59,10 +63,10 @@ async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
 
 ```python
 async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
-    await conn.set_assist_level(2)          # TRAIL
-    await conn.set_acceleration(50.0)       # 50%
+    await conn.set_assist_level(2)  # TRAIL
+    await conn.set_acceleration(50.0)  # 50%
     await conn.set_shuttle(25)
-    await conn.set_assist_percentage(0, 35) # ECO = 35%
+    await conn.set_assist_percentage(0, 35)  # ECO = 35%
 ```
 
 ## CLI

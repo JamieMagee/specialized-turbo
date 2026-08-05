@@ -8,24 +8,6 @@ reference implementation and the Micheledv74/turbolevo-pwa dashboard.
 import pytest
 
 from specialized_turbo.protocol import (
-    AssistLevel,
-    BatteryChannel,
-    MotorChannel,
-    BikeSettingsChannel,
-    BLEProfile,
-    BLEServiceID,
-    Sender,
-    _uuid,
-    _uuid_tcu1,
-    all_field_defs,
-    build_request,
-    detect_generation,
-    get_char_notify,
-    get_service_characteristics,
-    get_field_def,
-    get_uuid,
-    is_specialized_advertisement,
-    parse_message,
     CHAR_NOTIFY,
     CHAR_NOTIFY_TCU1,
     CHAR_REQUEST_READ,
@@ -34,16 +16,33 @@ from specialized_turbo.protocol import (
     CHAR_REQUEST_WRITE_TCU1,
     CHAR_WRITE,
     CHAR_WRITE_TCU1,
+    NORDIC_COMPANY_ID,
     SERVICE_DATA_NOTIFY,
     SERVICE_DATA_NOTIFY_TCU1,
     SERVICE_DATA_REQUEST,
     SERVICE_DATA_REQUEST_TCU1,
     SERVICE_DATA_WRITE,
     SERVICE_DATA_WRITE_TCU1,
-    NORDIC_COMPANY_ID,
     SIMPLO_COMPANY_ID,
+    AssistLevel,
+    BatteryChannel,
+    BikeSettingsChannel,
+    BLEProfile,
+    BLEServiceID,
+    MotorChannel,
+    Sender,
+    _uuid,
+    _uuid_tcu1,
+    all_field_defs,
+    build_request,
+    detect_generation,
+    get_char_notify,
+    get_field_def,
+    get_service_characteristics,
+    get_uuid,
+    is_specialized_advertisement,
+    parse_message,
 )
-
 
 # ======================================================================
 # UUID generation
@@ -582,7 +581,7 @@ class TestBuildWriteCommand:
         from specialized_turbo.protocol import build_write_command
 
         # 20% → raw = (20 * 60) + 3000 = 4200 = 0x1068 → LE: 68 10
-        raw = int(20 * 60 + 3000)
+        raw = 20 * 60 + 3000
         cmd = build_write_command(0x02, 0x07, raw.to_bytes(2, "little"))
         assert cmd == bytes.fromhex("020768100000"[:8])  # 02 07 68 10
         assert cmd[:2] == b"\x02\x07"

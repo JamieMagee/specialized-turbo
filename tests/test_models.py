@@ -254,7 +254,7 @@ class TestTelemetrySnapshot:
 class TestTCXFieldNameRouting:
     """TCX2+ messages route via field_name when sender/channel don't match."""
 
-    def _tcx_msg(self, field_name: str, value: float | int) -> ParsedMessage:
+    def _tcx_msg(self, field_name: str, value: float) -> ParsedMessage:
         """Build a ParsedMessage like parse_tcx_message() would."""
 
         return ParsedMessage(
