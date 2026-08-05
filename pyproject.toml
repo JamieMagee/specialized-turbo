@@ -50,5 +50,9 @@ exclude = ["/*.xapk"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
+[tool.ruff.lint.per-file-ignores]
+# Keep public re-exports grouped by API area.
+"specialized_turbo/__init__.py" = ["I001", "RUF022"]
+
 [tool.mypy]
 strict = true

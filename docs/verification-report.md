@@ -318,9 +318,9 @@ That bug has been fixed.
 This confirms the Python library's 3-step short handshake:
 ```python
 steps = [
-    BikeParameter.SYSTEM_GET_NEW_VI,   # 300
-    BikeParameter.SYSTEM_STATE,        # 363
-    BikeParameter.BATTERY1_FIRMWARE,   # 14
+    BikeParameter.SYSTEM_GET_NEW_VI,  # 300
+    BikeParameter.SYSTEM_STATE,  # 363
+    BikeParameter.BATTERY1_FIRMWARE,  # 14
 ]
 ```
 

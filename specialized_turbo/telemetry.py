@@ -18,7 +18,7 @@ from .connection import SpecializedConnection
 from .coordinator_helpers import TCX_POLL_PARAMS
 from .framing import is_realtime_packet
 from .models import TelemetrySnapshot
-from .protocol import parse_message, parse_tcx_message, ParsedMessage
+from .protocol import ParsedMessage, parse_message, parse_tcx_message
 from .session import TCXSession
 from .transport import TCXRequestTimeoutError
 
@@ -202,7 +202,7 @@ async def run_telemetry_session(
                 printer(json.dumps(snap.as_dict(), default=str))
             else:
                 printer(
-                    f"{msg.field_name:<28s} = {str(msg.converted_value):>10s} {msg.unit}"
+                    f"{msg.field_name:<28s} = {msg.converted_value!s:>10s} {msg.unit}"
                 )
 
         monitor.on_update = _on_update

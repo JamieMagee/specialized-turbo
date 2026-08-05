@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Self
 
 from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
@@ -18,6 +18,7 @@ from bleak.backends.scanner import AdvertisementData
 from .coordinator_helpers import identify_tcx
 from .protocol import (
     BLEProfile,
+    ParsedMessage,
     build_request,
     get_char_notify,
     get_char_request_read,
@@ -26,7 +27,6 @@ from .protocol import (
     is_specialized_advertisement,
     parse_message,
     parse_tcx_message,
-    ParsedMessage,
 )
 from .session import ProtocolSession, TCU1Session, TCXSession
 from .transport import (
@@ -55,13 +55,11 @@ async def scan_for_bikes(
     found: list[tuple[BLEDevice, AdvertisementData]] = []
 
     def _detection_callback(device: BLEDevice, adv: AdvertisementData) -> None:
-        if is_specialized_advertisement(adv.manufacturer_data):
-            # Avoid duplicates
-            if not any(d.address == device.address for d, _ in found):
-                logger.info(
-                    "Found Specialized bike: %s (%s)", device.name, device.address
-                )
-                found.append((device, adv))
+        if is_specialized_advertisement(adv.manufacturer_data) and not any(
+            d.address == device.address for d, _ in found
+        ):
+            logger.info("Found Specialized bike: %s (%s)", device.name, device.address)
+            found.append((device, adv))
 
     scanner = BleakScanner(detection_callback=_detection_callback)
     await scanner.start()
@@ -140,11 +138,11 @@ class SpecializedConnection:
 
     # -- context manager --------------------------------------------------
 
-    async def __aenter__(self) -> SpecializedConnection:
+    async def __aenter__(self) -> Self:
         await self.connect()
         return self
 
-    async def __aexit__(self, *exc: Any) -> None:
+    async def __aexit__(self, *exc: object) -> None:
         await self.disconnect()
 
     # -- connection lifecycle ---------------------------------------------
@@ -171,6 +169,7 @@ class SpecializedConnection:
                     "Initial read raised %s (expected during pairing): %s",
                     type(exc).__name__,
                     exc,
+                    exc_info=True,
                 )
             try:
                 logger.info("Requesting pairing with PIN %s ...", self._pin)
@@ -185,7 +184,12 @@ class SpecializedConnection:
                     self._pin,
                 )
             except Exception as exc:
-                logger.warning("Pairing raised %s: %s", type(exc).__name__, exc)
+                logger.warning(
+                    "Pairing raised %s: %s",
+                    type(exc).__name__,
+                    exc,
+                    exc_info=True,
+                )
 
         # Create protocol session
         if self._generation == BLEProfile.TCX:

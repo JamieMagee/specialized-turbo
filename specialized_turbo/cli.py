@@ -17,7 +17,7 @@ import time
 
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
-from .connection import scan_for_bikes, SpecializedConnection
+from .connection import SpecializedConnection, scan_for_bikes
 from .parameters import all_tcx_fields
 from .protocol import (
     all_field_defs,
@@ -239,13 +239,14 @@ async def _cmd_write(args: argparse.Namespace) -> None:
 async def _cmd_services(args: argparse.Namespace) -> None:
     """Connect and enumerate all GATT services/characteristics (debug)."""
     from bleak import BleakClient
+    from bleak.exc import BleakError
 
     print(f"Connecting to {args.address} ...")
     async with BleakClient(args.address) as client:
         if args.pin is not None:
             try:
                 await client.pair(protection_level=2)
-            except Exception as e:
+            except (BleakError, NotImplementedError) as e:
                 print(f"Pairing note: {e}")
 
         print("Connected. Enumerating services ...\n")

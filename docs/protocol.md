@@ -46,6 +46,7 @@ TCU1 bikes advertise with Simplo Technology's company ID. The device name is `"S
 ```python
 ADVERTISING_MAGIC = b"TURBOHMI"
 
+
 def detect_generation(manufacturer_data: dict[int, bytes]) -> str | None:
     for payload in manufacturer_data.values():
         if ADVERTISING_MAGIC in payload:
@@ -293,6 +294,7 @@ The encryption key comes from the bike's `BTEncryptionInfo`, which is exchanged 
 ```python
 import base64
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
 
 def derive_key(base64_key: str) -> bytes:
     raw = base64.b64decode(base64_key)

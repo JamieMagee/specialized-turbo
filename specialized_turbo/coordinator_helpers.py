@@ -24,10 +24,10 @@ from .models import TelemetrySnapshot
 from .parameters import BikeParameter
 from .protocol import (
     TCU1_POLL_FIELDS,
+    ParsedMessage,
     build_request,
     parse_message,
     parse_tcx_message,
-    ParsedMessage,
 )
 from .session import ProtocolSession, TCXSession
 from .transport import TCXNotificationTransport
@@ -93,7 +93,7 @@ async def poll_tcu1(
             if msg.sender == sender and msg.channel == channel:
                 snapshot.update_from_message(msg)
                 updated = True
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug(
                 "Failed to poll TCU1 field (%02x, %02x)",
                 sender,
@@ -125,7 +125,7 @@ async def poll_tcx(
                 continue
             snapshot.update_from_message(msg)
             updated = True
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("Failed to poll TCX param %d", int(param), exc_info=True)
     return updated
 
@@ -172,7 +172,7 @@ async def identify_tcx(
 
             if param == BikeParameter.BATTERY1_FIRMWARE:
                 key_response = inner
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning(
             "TCX identification handshake failed, using unencrypted session",
             exc_info=True,
@@ -206,7 +206,7 @@ async def identify_tcx(
         aes_key = derive_key(key_data.decode("ascii"))
         logger.info("TCX encryption key derived, using encrypted session")
         return TCXSession(key=aes_key, iv=b"\x00" * 16)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning(
             "Failed to derive encryption key, using unencrypted session",
             exc_info=True,
