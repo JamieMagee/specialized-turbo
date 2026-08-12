@@ -322,6 +322,7 @@ The JSON response contains a 64-character base64 `key`. Unwrapping:
 import base64
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
+
 def unwrap_key(base64_key: str, wrapping_key: bytes) -> bytes:
     raw = base64.b64decode(base64_key, validate=True)
     wrapping_iv = raw[:16]
