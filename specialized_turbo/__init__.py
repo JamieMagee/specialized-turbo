@@ -45,6 +45,8 @@ from .protocol import (
     BLEProfile as BLEProfile,
     BLEServiceID as BLEServiceID,
     BLEServiceCharacteristics as BLEServiceCharacteristics,
+    BikeAdvertisement as BikeAdvertisement,
+    ProtocolEncryptionMethod as ProtocolEncryptionMethod,
     get_uuid as get_uuid,
     get_char_notify as get_char_notify,
     get_char_request_read as get_char_request_read,
@@ -52,6 +54,7 @@ from .protocol import (
     get_char_write as get_char_write,
     get_service_characteristics as get_service_characteristics,
     detect_generation as detect_generation,
+    parse_bike_advertisement as parse_bike_advertisement,
     # Enums
     Sender as Sender,
     BatteryChannel as BatteryChannel,
@@ -84,6 +87,7 @@ from .connection import (
     SpecializedConnection as SpecializedConnection,
     scan_for_bikes as scan_for_bikes,
     find_bike_by_address as find_bike_by_address,
+    find_bike_advertisement_by_address as find_bike_advertisement_by_address,
 )
 from .telemetry import (
     TelemetryMonitor as TelemetryMonitor,
@@ -110,10 +114,22 @@ from .parameters import (
     decode_parameter_id as decode_parameter_id,
 )
 from .encryption import (
+    EncryptionError as EncryptionError,
+    WrappedKeyError as WrappedKeyError,
+    PRODUCTION_WRAPPING_KEY as PRODUCTION_WRAPPING_KEY,
+    STAGING_WRAPPING_KEY as STAGING_WRAPPING_KEY,
     encrypt_packet as encrypt_packet,
     decrypt_packet as decrypt_packet,
     derive_key as derive_key,
+    unwrap_keystore_key as unwrap_keystore_key,
     is_encryptable as is_encryptable,
+)
+from .key_provider import (
+    EncryptionKeyProvider as EncryptionKeyProvider,
+    EncryptionKeyProviderError as EncryptionKeyProviderError,
+    EncryptionKeyRequiredError as EncryptionKeyRequiredError,
+    StaticKeyProvider as StaticKeyProvider,
+    resolve_bike_key as resolve_bike_key,
 )
 from .session import (
     ProtocolSession as ProtocolSession,
@@ -164,6 +180,8 @@ __all__ = [
     "BLEProfile",
     "BLEServiceID",
     "BLEServiceCharacteristics",
+    "BikeAdvertisement",
+    "ProtocolEncryptionMethod",
     "get_uuid",
     "get_char_notify",
     "get_char_request_read",
@@ -171,6 +189,7 @@ __all__ = [
     "get_char_write",
     "get_service_characteristics",
     "detect_generation",
+    "parse_bike_advertisement",
     # Enums
     "Sender",
     "BatteryChannel",
@@ -201,6 +220,7 @@ __all__ = [
     "SpecializedConnection",
     "scan_for_bikes",
     "find_bike_by_address",
+    "find_bike_advertisement_by_address",
     # Telemetry
     "TelemetryMonitor",
     "run_telemetry_session",
@@ -226,10 +246,21 @@ __all__ = [
     "build_tcx_request",
     "build_tcx_write",
     # Encryption
+    "EncryptionError",
+    "WrappedKeyError",
+    "PRODUCTION_WRAPPING_KEY",
+    "STAGING_WRAPPING_KEY",
     "encrypt_packet",
     "decrypt_packet",
     "derive_key",
+    "unwrap_keystore_key",
     "is_encryptable",
+    # Encryption key providers
+    "EncryptionKeyProvider",
+    "EncryptionKeyProviderError",
+    "EncryptionKeyRequiredError",
+    "StaticKeyProvider",
+    "resolve_bike_key",
     # Session
     "ProtocolSession",
     "TCU1Session",
@@ -246,4 +277,4 @@ __all__ = [
     "identify_tcx",
 ]
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"

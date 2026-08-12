@@ -2,12 +2,18 @@
 Unit tests for encryption.py — AES-128-CTR encryption for TCX2+ protocol.
 """
 
+import base64
+
 import pytest
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from specialized_turbo.encryption import (
+    PRODUCTION_WRAPPING_KEY,
+    WrappedKeyError,
     decrypt_packet,
     encrypt_packet,
     is_encryptable,
+    unwrap_keystore_key,
 )
 from specialized_turbo.framing import FRAMED_PACKET_SIZE, pack_tcx
 
@@ -39,9 +45,10 @@ class TestEncryptDecryptRoundTrip:
         plaintext = pack_tcx(b"\x00\x1a\x34\x00\x00\x00\x00\x00")
 
         encrypted = encrypt_packet(key, iv, plaintext)
-        # Header preserved, body changed
+        # Header and CRC are clear; only the 16-byte payload changes.
         assert encrypted[:2] == plaintext[:2]
-        assert encrypted[2:] != plaintext[2:]
+        assert encrypted[2:18] != plaintext[2:18]
+        assert encrypted[18:] == plaintext[18:]
 
         decrypted = decrypt_packet(key, iv, encrypted)
         assert decrypted == plaintext
@@ -81,4 +88,35 @@ class TestEncryptPacketHeaderPreservation:
         encrypted = encrypt_packet(key, iv, plaintext)
         assert encrypted[0] == 0xAB
         assert encrypted[1] == 0xCD
+        assert encrypted[-2:] == plaintext[-2:]
         assert len(encrypted) == FRAMED_PACKET_SIZE
+
+
+class TestWrappedKey:
+    def test_unwraps_keystore_response(self):
+        expected = bytes.fromhex("00112233445566778899aabbccddeeff")
+        wrapping_iv = bytes(range(16))
+        cipher = Cipher(
+            algorithms.AES(PRODUCTION_WRAPPING_KEY),
+            modes.CTR(wrapping_iv),
+        )
+        encryptor = cipher.encryptor()
+        encrypted_hex = (
+            encryptor.update(expected.hex().encode("ascii")) + encryptor.finalize()
+        )
+        wrapped = base64.b64encode(wrapping_iv + encrypted_hex).decode("ascii")
+
+        assert len(wrapped) == 64
+        assert unwrap_keystore_key(wrapped) == expected
+
+    @pytest.mark.parametrize(
+        "wrapped",
+        [
+            "",
+            "not-base64" * 8,
+            base64.b64encode(bytes(47)).decode("ascii"),
+        ],
+    )
+    def test_rejects_invalid_wrapped_key(self, wrapped):
+        with pytest.raises(WrappedKeyError):
+            unwrap_keystore_key(wrapped)

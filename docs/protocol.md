@@ -25,13 +25,31 @@ All generations advertise with at least one of these manufacturer data payloads:
 
 ### Nordic (company ID `0x0059`)
 
-TCX2, TCX3, and TCX4 bikes. The payload starts with the ASCII string `"TURBOHMI2017"`:
+Legacy TCX advertisements contain the ASCII string `"TURBOHMI2017"`:
 
 ```
 Company ID: 59 00
 Payload:    54 55 52 42 4f 48 4d 49 32 30 31 37 01 00 00 00 00
             T  U  R  B  O  H  M  I  2  0  1  7
 ```
+
+Newer encrypted bikes use a 10-byte binary payload:
+
+| Offset | Size | Meaning |
+| --- | ---: | --- |
+| 0 | 4 | HMI serial number, unsigned little-endian integer |
+| 4 | 1 | HMI hardware major version |
+| 5 | 1 | HMI hardware minor version |
+| 6 | 1 | HMI hardware patch version |
+| 7 | 1 | Reserved |
+| 8 | 1 | Bike type |
+| 9 | 1 | System state |
+
+The HMI serial is rendered as decimal and the hardware version as
+`major.minor.patch`. These values identify the wrapped key in Specialized's
+keystore API. A 10-byte Nordic payload must also be matched by Specialized
+device name or service UUID to avoid treating unrelated Nordic devices as
+bikes.
 
 ### Apple iBeacon (company ID `0x004C`)
 
@@ -44,16 +62,12 @@ TCU1 bikes advertise with Simplo Technology's company ID. The device name is `"S
 ### Detection
 
 ```python
-ADVERTISING_MAGIC = b"TURBOHMI"
-
-
-def detect_generation(manufacturer_data: dict[int, bytes]) -> str | None:
-    for payload in manufacturer_data.values():
-        if ADVERTISING_MAGIC in payload:
-            return "tcx"  # TCX2, TCX3, or TCX4
-    if 0x020D in manufacturer_data:
-        return "tcu1"
-    return None
+advertisement = parse_bike_advertisement(
+    manufacturer_data,
+    local_name=advertised_name,
+    service_uuids=advertised_service_uuids,
+)
+generation = advertisement.generation if advertisement else None
 ```
 
 The detection tells you TCU1 vs TCX. Telling TCX2 apart from TCX3 or TCX4 requires the identification handshake (section below).
@@ -198,7 +212,8 @@ The payload contains:
 [param_id: 2 bytes big-endian] [data: 0-16 bytes little-endian] [zero padding]
 ```
 
-The parameter ID is a 16-bit value from the `BikeParameter` enum (352 known values). It replaces the TCU1 sender/channel pair -- there's no sender byte, just a flat ID namespace.
+The parameter ID is a 16-bit value from the `BikeParameter` enum. It replaces
+the TCU1 sender/channel pair -- there's no sender byte, just a flat ID namespace.
 
 ### Processing pipeline
 
@@ -214,7 +229,8 @@ Incoming (bike to client):
 BLE notify --> AES-CTR decrypt --> CRC-16 validate and strip --> parse parameter
 ```
 
-Encryption is optional. Some older TCX2 bikes and all TCU1 bikes work without it. Whether encryption is needed depends on the identification handshake.
+Encryption is optional. The modern 10-byte advertisement declares AES-CTR
+before the GATT connection is opened.
 
 ---
 
@@ -248,15 +264,18 @@ Verifying: `crc_hqx(bytes.fromhex("f8ff000c0500000000000000000000000000"), 0xFFF
 
 ## AES-128-CTR encryption
 
-Some TCX2+ bikes encrypt notifications and query responses with AES-128-CTR. The encryption key is exchanged during the identification handshake.
+Some TCX2+ bikes encrypt notifications and query responses with AES-128-CTR.
+The bike key comes from Specialized's cloud keystore; the per-connection IV
+comes from the first identification response.
 
 ### Encrypted packet layout
 
 ```
-[param_id: 2 bytes, CLEAR] [body: 18 bytes, ENCRYPTED]
+[param_id: 2 bytes, CLEAR] [body: 16 bytes, ENCRYPTED] [CRC: 2 bytes, CLEAR]
 ```
 
-The first two bytes (the parameter ID) are always in the clear. Bytes 2-19 are AES-128-CTR encrypted. Since CTR mode is symmetric, the same operation encrypts and decrypts.
+The parameter ID and CRC remain clear. Only bytes 2-17 are transformed. The AES
+context is reinitialized with the same bike key and session IV for each packet.
 
 ### Packets that skip encryption
 
@@ -280,29 +299,36 @@ The 2-byte parameter ID is the request that was rejected, echoed back. The
 `framing.is_nak_packet()` and surfaces them through `ParsedMessage.nak_reason`
 rather than parsing the reason byte as if it were valid data.
 
-### Key derivation
+### Cloud key retrieval and unwrapping
 
-The encryption key comes from the bike's `BTEncryptionInfo`, which is exchanged during identification step 4 (parameter ID 14 / `BATTERY1_FIRMWARE`). The derivation:
+For advertisements marked `AES_CTR`, the official app requests:
 
-1. Start with a 64-character base64-encoded string from the bike
-2. Base64-decode it (yields ~48 raw bytes)
-3. The first 16 bytes are an intermediate AES key
-4. The remaining bytes are AES-CTR decrypted using that intermediate key with a zero IV
-5. The decrypted result is an ASCII hex string
-6. Hex-decode that string to get the final 16-byte AES key
+```http
+GET https://api.specialized.com/keystore-service/v2/keystores
+    ?hmiHW=<hardware-version>
+    &hmiSN=<serial-number>
+Authorization: Bearer <Specialized access token>
+```
+
+The JSON response contains a 64-character base64 `key`. Unwrapping:
+
+1. Base64-decode the value to 48 bytes.
+2. Use bytes 0-15 as the wrapping IV.
+3. AES-128-CTR decrypt bytes 16-47 with the app's environment wrapping key.
+4. Interpret the result as 32 ASCII hex characters.
+5. Hex-decode it to the final 16-byte bike key.
 
 ```python
 import base64
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-
-def derive_key(base64_key: str) -> bytes:
-    raw = base64.b64decode(base64_key)
-    intermediate = raw[:16]
-    encrypted_rest = raw[16:]
-    cipher = Cipher(algorithms.AES(intermediate), modes.CTR(b"\x00" * 16))
+def unwrap_key(base64_key: str, wrapping_key: bytes) -> bytes:
+    raw = base64.b64decode(base64_key, validate=True)
+    wrapping_iv = raw[:16]
+    encrypted_hex = raw[16:]
+    cipher = Cipher(algorithms.AES(wrapping_key), modes.CTR(wrapping_iv))
     decryptor = cipher.decryptor()
-    hex_str = decryptor.update(encrypted_rest) + decryptor.finalize()
+    hex_str = decryptor.update(encrypted_hex) + decryptor.finalize()
     return bytes.fromhex(hex_str.decode("ascii"))
 ```
 
@@ -319,21 +345,24 @@ awaits the matching notification on `0x0011`.
 
 | Step | Param ID | Name | Purpose |
 | --- | --- | --- | --- |
-| 1 | 300 | `SYSTEM_GET_NEW_VI` | Trigger identification from scan data |
-| 2 | 310 | `SYSTEM_HMI_PROTOCOL_VERSION` | Protocol version negotiation |
-| 3 | 363 | `SYSTEM_STATE` | System state (ready, sleeping, etc.) |
-| 4 | 14 | `BATTERY1_FIRMWARE` | Encryption key exchange |
-| 5 | 308 | `SYSTEM_HMI_HW_VERSION` | HMI hardware version |
-| 6 | 329 | `SYSTEM_MOTOR_TYPE` | Motor type |
-| 7 | 290 | `SYSTEM_EBIKE_SERIAL_NUMBER` | Serial / battery info |
+| 1 | 301 | `SYSTEM_GET_NEW_VI` | Return the fresh 16-byte session IV |
+| 2 | 311 | `SYSTEM_HMI_PROTOCOL_VERSION` | Protocol version negotiation |
+| 3 | 364 | `SYSTEM_STATE` | System state (ready, sleeping, etc.) |
+| 4 | 14 | `BATTERY1_FIRMWARE` | Battery firmware metadata |
+| 5 | 309 | `SYSTEM_HMI_HW_VERSION` | HMI hardware version |
+| 6 | 330 | `SYSTEM_MOTOR_TYPE` | Motor type |
+| 7 | 291 | `SYSTEM_EBIKE_SERIAL_NUMBER` | Serial / battery info |
 
 ### Short identification steps (reconnecting to known bike)
 
 | Step | Param ID | Name |
 | --- | --- | --- |
-| 1 | 300 | `SYSTEM_GET_NEW_VI` |
-| 2 | 363 | `SYSTEM_STATE` |
-| 3 | 14 | `BATTERY1_FIRMWARE` (encryption key) |
+| 1 | 301 | `SYSTEM_GET_NEW_VI` |
+| 2 | 364 | `SYSTEM_STATE` |
+| 3 | 14 | `BATTERY1_FIRMWARE` (TCX3/TCX4 metadata) |
+
+The first request is clear. Its 16-byte response IV is installed alongside the
+cloud-derived bike key before the remaining requests are sent.
 
 The identification result determines the bike type, which maps to a protocol generation:
 
@@ -395,32 +424,32 @@ Note that conversions differ from TCU1 in several cases. TCX battery voltage and
 
 | Param ID | Name | Field name | Unit | Size | Conversion |
 | --- | --- | --- | --- | --- | --- |
-| 139 | `MOTOR_ACCELERATION_RESPONSE` | `acceleration` | % | 2B | `(raw - 3000) / 60` |
-| 143 | `MOTOR_ACTIVE_TRAVEL_MODE` | `assist_level` | | 1B | direct |
-| 147 | `MOTOR_BIKE_CADENCE` | `cadence` | RPM | 2B | `raw / 10` |
-| 148 | `MOTOR_BIKE_SPEED` | `speed` | km/h | 2B | `raw / 10` |
-| 181 | `MOTOR_MAX_SPEED_LIMIT` | `max_speed_limit` | km/h | 2B | `raw / 10` |
-| 182 | `MOTOR_ODOMETER` | `odometer` | km | 4B | `raw / 1000` |
-| 186 | `MOTOR_POWER` | `motor_power` | W | 2B | direct |
-| 191 | `MOTOR_RIDER_INPUT_POWER` | `rider_power` | W | 2B | direct |
-| 196 | `MOTOR_TEMPERATURE` | `motor_temp` | C | 1B | direct |
-| 203 | `MOTOR_WHEEL_SIZE` | `wheel_circumference` | mm | 2B | direct |
+| 140 | `MOTOR_ACCELERATION_RESPONSE` | `acceleration` | % | 2B | `(raw - 3000) / 60` |
+| 144 | `MOTOR_ACTIVE_TRAVEL_MODE` | `assist_level` | | 1B | direct |
+| 148 | `MOTOR_BIKE_CADENCE` | `cadence` | RPM | 2B | `raw / 10` |
+| 149 | `MOTOR_BIKE_SPEED` | `speed` | km/h | 2B | `raw / 10` |
+| 182 | `MOTOR_MAX_SPEED_LIMIT` | `max_speed_limit` | km/h | 2B | `raw / 10` |
+| 183 | `MOTOR_ODOMETER` | `odometer` | km | 4B | `raw / 1000` |
+| 187 | `MOTOR_POWER` | `motor_power` | W | 2B | direct |
+| 192 | `MOTOR_RIDER_INPUT_POWER` | `rider_power` | W | 2B | direct |
+| 197 | `MOTOR_TEMPERATURE` | `motor_temp` | C | 1B | direct |
+| 204 | `MOTOR_WHEEL_SIZE` | `wheel_circumference` | mm | 2B | direct |
 
 ### System
 
 | Param ID | Name | Field name | Unit | Size | Conversion |
 | --- | --- | --- | --- | --- | --- |
-| 242 | `SYSTEM_ALT` | `altitude` | m | 2B | direct |
-| 244 | `SYSTEM_ALT_DESCENT` | `altitude_descent` | m | 2B | direct |
-| 245 | `SYSTEM_ALT_GAIN` | `altitude_gain` | m | 2B | direct |
-| 279 | `SYSTEM_CONSUMPTION` | `consumption` | Wh/km | 2B | direct |
-| 302 | `SYSTEM_GRADIENT` | `gradient` | % | 2B | `raw / 10` |
-| 320 | `SYSTEM_KCAL` | `kcal` | kcal | 2B | direct |
-| 341 | `SYSTEM_RANGE_LONG` | `range_long` | km | 2B | `raw / 10` |
-| 342 | `SYSTEM_RANGE_SHORT` | `range_short` | km | 2B | `raw / 10` |
-| 343 | `SYSTEM_RANGE_TREND` | `range_trend` | | 1B | direct |
-| 363 | `SYSTEM_STATE` | `system_state` | | 1B | direct |
-| 371 | `SYSTEM_TEMPERATURE` | `system_temp` | C | 1B | direct |
+| 243 | `SYSTEM_ALT` | `altitude` | m | 2B | direct |
+| 245 | `SYSTEM_ALT_DESCENT` | `altitude_descent` | m | 2B | direct |
+| 246 | `SYSTEM_ALT_GAIN` | `altitude_gain` | m | 2B | direct |
+| 280 | `SYSTEM_CONSUMPTION` | `consumption` | Wh/km | 2B | direct |
+| 303 | `SYSTEM_GRADIENT` | `gradient` | % | 2B | `raw / 10` |
+| 321 | `SYSTEM_KCAL` | `kcal` | kcal | 2B | direct |
+| 342 | `SYSTEM_RANGE_LONG` | `range_long` | km | 2B | `raw / 10` |
+| 343 | `SYSTEM_RANGE_SHORT` | `range_short` | km | 2B | `raw / 10` |
+| 344 | `SYSTEM_RANGE_TREND` | `range_trend` | | 1B | direct |
+| 364 | `SYSTEM_STATE` | `system_state` | | 1B | direct |
+| 372 | `SYSTEM_TEMPERATURE` | `system_temp` | C | 1B | direct |
 
 ### Identification parameters
 
@@ -428,11 +457,11 @@ These are read during the identification handshake, not during normal telemetry:
 
 | Param ID | Name | Field name | Size |
 | --- | --- | --- | --- |
-| 271 | `SYSTEM_BIKE_TYPE` | `bike_type` | 1B |
-| 290 | `SYSTEM_EBIKE_SERIAL_NUMBER` | `ebike_serial` | 16B |
-| 308 | `SYSTEM_HMI_HW_VERSION` | `hmi_hw_version` | 4B |
-| 314 | `SYSTEM_HMI_SW_VERSION` | `hmi_sw_version` | 4B |
-| 329 | `SYSTEM_MOTOR_TYPE` | `motor_type` | 1B |
+| 272 | `SYSTEM_BIKE_TYPE` | `bike_type` | 1B |
+| 291 | `SYSTEM_EBIKE_SERIAL_NUMBER` | `ebike_serial` | 16B |
+| 309 | `SYSTEM_HMI_HW_VERSION` | `hmi_hw_version` | 4B |
+| 315 | `SYSTEM_HMI_SW_VERSION` | `hmi_sw_version` | 4B |
+| 330 | `SYSTEM_MOTOR_TYPE` | `motor_type` | 1B |
 
 The full set of 352 `BikeParameter` IDs is defined in `parameters.py`. Most are for diagnostics, DFU (firmware updates), or subsystems like Shimano electronic shifting, Enviolo hubs, radar, and locks that this library doesn't parse yet.
 

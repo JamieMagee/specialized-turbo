@@ -1,8 +1,8 @@
 # Specialized Turbo BLE Protocol — Independent Verification Report
 
-Verified by decompiling the Specialized Android app v1.66.0
-(`com.specialized.turboconnect`) with jadx and analyzing the native
-`libturbo-core.so` (272 MB ARM64) with string extraction.
+Originally verified against Android app v1.66.0, then corrected against
+`com.specialized.android` v1.70.1 (`261910614`) with JADX and Ghidra analysis
+of the current ARM64 `libturbo-core.so`.
 
 ---
 
@@ -19,19 +19,19 @@ not GATT reads.
 
 | Area | Status | Notes |
 |------|--------|-------|
-| BikeParameter enum (352 IDs) | ✅ Verified | 348 exact matches; 4 in Python only, 1 in app only |
+| BikeParameter enum (353 IDs) | ✅ Verified | Current app enum plus two native-only identification IDs |
 | GATT UUID bases | ✅ Verified | TURBOHMI and GIGATRONIK bases match exactly |
 | Service short IDs (0x01/0x02/0x03) | ✅ Verified | |
 | Characteristic short IDs (0x11/0x12/0x13/0x21/0x22/0x23) | ✅ Verified | Three notify/write pairs |
 | TCX transaction model | ✅ Verified | Write without response, correlate notification |
 | CRC-16/CCITT-FALSE | ✅ Verified | Native `CRC16Calculator` matches `crc_hqx` |
 | AES-128-CTR encryption | ✅ Verified | `ProtocolEncryptionMethod.AES_CTR` confirmed |
-| Key derivation pipeline | ✅ Verified | `BTEncryptionInfo.key` → base64 → AES → hex |
+| Cloud key pipeline | ✅ Verified | Keystore API → base64 unwrap → 16-byte bike key |
 | Identification handshake | ✅ Verified | Full 7-step over write+notify |
 | Packet size (20 bytes) | ✅ Verified | |
 | F8FF NAK marker | ✅ Verified (was misinterpreted as envelope) | `ProtocolSessionTCX2::isNakPacket` checks for `F8 FF`; the library now detects it as a NAK rather than stripping it as a wrapper around valid data |
 | NAK byte (0x0A) | ✅ Verified | Handled in native code |
-| BLE advertisement detection | ✅ Verified | TURBOHMI magic, company IDs match |
+| BLE advertisement detection | ✅ Verified | TURBOHMI plus modern 10-byte Nordic format |
 | Field conversions | ✅ Verified | Ghidra: decoders skip 2B param ID, read param.length bytes |
 
 ---
@@ -43,20 +43,15 @@ not GATT reads.
 **Method**: Extracted all `(name, wire_id)` pairs from both the decompiled
 `BikeParameter.java` (jadx) and `parameters.py` (Python IntEnum).
 
-**Results**: 349 entries in app (excl. `UNKNOWN`), 353 in Python.
-- **348 exact matches** — name and wire ID are identical.
-- **0 ID mismatches** — every shared parameter has the same numeric ID.
+**Current results**: 351 entries in the v1.70.1 Java enum plus two native-only
+identification IDs in Python:
 
-**Only in Android app (1)**:
-- `SYSTEM_BIKE_ERRORS_CODE` (id=265) — **new parameter, should be added to Python**
+- `SYSTEM_GET_NEW_VI = 301`
+- `SYSTEM_HMI_PROTOCOL_VERSION = 311`
 
-**Only in Python library (5)**:
-- `SYSTEM_GET_NEW_VI` (300) — identification-sequence sentinel, not a real
-  parameter in the app enum. Correct to keep in Python as a special value.
-- `JUMP_FLOW` (127), `LOCK_HW` (136), `MOTOR_ACCELERATION_RESPONSE` (139),
-  `MOTOR_CADENCE_CONTROL` (149) — may have been renamed or removed in app v1.66.
-  The Python library may have been extracted from an older app version. These IDs
-  are still valid on the wire even if the app no longer names them.
+The v1.70.1 app inserted `DROPPER_COUNT = 93`, shifting many later IDs. The
+library enum now matches every current Java entry and removes stale names whose
+old values collide with current parameters.
 
 ### 2. GATT UUIDs
 
@@ -143,23 +138,26 @@ Python `framing.py` uses `binascii.crc_hqx(data, 0xFFFF)` — the same algorithm
 
 - `ProtocolEncryptionMethod` enum: `NONE=0`, `AES_CTR=1` — confirmed.
 - Native functions: `encryptPacket()`, `decryptPacket()` in TurboConnectCore.
-- Bytes 0–1 (param ID) in clear, bytes 2–19 encrypted.
-- Per-session key derived from identification handshake step 4.
+- Bytes 0–1 (param ID) and 18–19 (CRC) remain clear.
+- Only bytes 2–17 are encrypted.
+- Per-bike key comes from the cloud; the session IV comes from step 1.
 
 Python `encryption.py` implements the same: header preserved, body encrypted
 with AES-128-CTR. ✅ **Match.**
 
 ### 7. Key Derivation
 
-`BTEncryptionInfo` stores: `hmiSN`, `hmiHW`, `key` (base64 string).
-Key derivation pipeline (in native code):
-1. Base64 decode the key string → ~48 raw bytes
-2. First 16 bytes = intermediate AES key
-3. Remaining bytes = AES-CTR encrypted with intermediate key + zero IV
-4. Decrypt → ASCII hex string
-5. Hex decode → final 16-byte AES key
+`BTEncryptionInfo` stores `hmiSN`, `hmiHW`, and the 64-character base64 key
+returned by `GET /keystore-service/v2/keystores`.
 
-Python `encryption.py::derive_key()` implements this exact pipeline.
+Current native pipeline:
+1. Base64 decode to 48 bytes.
+2. First 16 bytes are the wrapping IV.
+3. Remaining 32 bytes are AES-CTR ciphertext.
+4. Decrypt with the app's environment wrapping key.
+5. Hex decode the 32-character plaintext to the final 16-byte bike key.
+
+Python `encryption.py::unwrap_keystore_key()` implements this pipeline.
 ✅ **Confirmed match.**
 
 ### 8. Identification Handshake
@@ -311,22 +309,22 @@ That bug has been fixed.
 ### Identification Handshake — Decompiled ✅
 
 **initShortSteps** pushes parameter IDs to the identification sequence:
-1. `300` (SYSTEM_GET_NEW_VI)
-2. `0x16B` = `363` (SYSTEM_STATE)
-3. If TCX3 or TCX4: adds parameter `14` (BATTERY1_FIRMWARE) for encryption key
+1. `301` (SYSTEM_GET_NEW_VI)
+2. `364` (SYSTEM_STATE)
+3. If TCX3 or TCX4: adds parameter `14` (BATTERY1_FIRMWARE metadata)
 
 This confirms the Python library's 3-step short handshake:
 ```python
 steps = [
-    BikeParameter.SYSTEM_GET_NEW_VI,  # 300
-    BikeParameter.SYSTEM_STATE,  # 363
-    BikeParameter.BATTERY1_FIRMWARE,  # 14
+    BikeParameter.SYSTEM_GET_NEW_VI,   # 301
+    BikeParameter.SYSTEM_STATE,        # 364
+    BikeParameter.BATTERY1_FIRMWARE,   # 14
 ]
 ```
 
-**Note**: The native code conditionally adds step 3 only for TCX3/TCX4. The
-Python library always includes it, which is safe — if the bike doesn't support
-encryption, the response will be empty and the library falls back to unencrypted.
+The cloud-derived key is installed before identification. The
+`SYSTEM_GET_NEW_VI` response supplies the 16-byte packet IV; parameter 14 does
+not carry key material.
 
 ### Field Decoders — Decompiled ✅
 
@@ -346,23 +344,17 @@ after the 2-byte parameter ID and applying per-field conversions.
 
 ### Key Derivation — Decompiled ✅
 
-**decryptHexString**: The decompiled code shows:
-1. `hexStringToByteVector()` — converts hex string inputs to byte vectors
-2. Creates `AES_ctx` with zeroed-out round keys (zero IV)
-3. Calls AES decryption on the data
-
-This is part of the key derivation pipeline. Combined with the
-`BTEncryptionInfo.key` field (base64 string), the full pipeline is:
-base64 decode → split at 16 → AES decrypt with zero IV → hex decode.
-
-The Python `encryption.py::derive_key()` implements this exact pipeline. ✅
+The v1.70.1 `parseEncryptionKey()` decompilation shows the API value split into
+a 16-byte wrapping IV and 32-byte ciphertext. The ciphertext is decrypted with
+the environment-specific wrapping key, converted from ASCII hex, and installed
+as the session's 16-byte AES key. ✅
 
 ### Encryption Layout — Decompiled
 
 **encryptPacket** and **decryptPacket**: Both take `(key, iv, packet)` vectors.
-The actual implementation is behind an indirect call (vtable/thunk), but the
-function signatures confirm: `vector<uint8_t> key`, `vector<uint8_t> iv`,
-`vector<uint8_t> packet` → returns `vector<uint8_t>`.
+The decompiled implementations copy bytes 0–1 and 18–19 unchanged, transform
+the 16 bytes in the middle, and concatenate the three parts. This confirms the
+CRC remains clear.
 
 The AES implementation uses `AES_ECB_encrypt` as the primitive (visible in
 exported symbols), which is standard for implementing CTR mode on top of ECB.

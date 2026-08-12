@@ -10,6 +10,12 @@ Async, built on [bleak](https://github.com/hbldh/bleak). Includes a CLI. Protoco
 pip install specialized-turbo
 ```
 
+For automatic key retrieval on newer encrypted bikes:
+
+```bash
+pip install "specialized-turbo[cloud]"
+```
+
 ## Quick start
 
 ### Stream telemetry
@@ -30,6 +36,31 @@ async def main():
 
 asyncio.run(main())
 ```
+
+Newer bikes advertise an HMI serial/hardware pair and require a wrapped key
+from Specialized's keystore API. Supply either a provider or a wrapped key:
+
+```python
+from specialized_turbo import SpecializedConnection
+from specialized_turbo.cloud import SpecializedCloudClient
+
+async with SpecializedCloudClient() as cloud:
+    await cloud.login("rider@example.com", password)
+    async with SpecializedConnection(
+        "DC:DD:BB:4A:D6:55",
+        pin="946166",
+        key_provider=cloud,
+    ) as conn:
+        ...
+
+# Or avoid account authentication by supplying the 64-character wrapped key.
+async with SpecializedConnection(address, wrapped_key=wrapped_key) as conn:
+    ...
+```
+
+The password is not persisted by the library. Provider users control token
+storage; manual-key users can operate without cloud access after obtaining the
+per-bike wrapped key.
 
 ### Read the snapshot
 
@@ -78,10 +109,34 @@ specialized-turbo scan
 specialized-turbo scan --timeout 15
 ```
 
+Retrieve the wrapped key required by a newer encrypted bike:
+
+```bash
+specialized-turbo fetch-key DC:DD:BB:4A:D6:55 \
+  --email rider@example.com
+```
+
+The password is prompted without echo. By default, stdout contains only the
+64-character wrapped key, ready for `--wrapped-key` or the Home Assistant
+manual-key flow. Use explicit HMI identifiers when the bike is not nearby:
+
+```bash
+specialized-turbo fetch-key \
+  --hmi-hardware 3.2.1 \
+  --hmi-serial 123456789 \
+  --email rider@example.com \
+  --json
+```
+
+`fetch-key` requires `specialized-turbo[cloud]`. It does not print the final
+unwrapped AES key.
+
 Stream telemetry:
 
 ```bash
 specialized-turbo telemetry DC:DD:BB:4A:D6:55 --pin 946166
+specialized-turbo telemetry DC:DD:BB:4A:D6:55 --email rider@example.com
+specialized-turbo telemetry DC:DD:BB:4A:D6:55 --wrapped-key "$WRAPPED_KEY"
 specialized-turbo telemetry DC:DD:BB:4A:D6:55 --pin 946166 --format json
 specialized-turbo telemetry DC:DD:BB:4A:D6:55 --pin 946166 --duration 30
 ```
@@ -151,11 +206,15 @@ Four protocol generations exist:
 | Protocol | Message format | Encryption |
 | --- | --- | --- |
 | TCU1 | `[sender][channel][data]` | None |
-| TCX2 | 2-byte parameter ID + CRC-16 | Optional AES-128-CTR |
+| TCX2 | 2-byte parameter ID + payload + clear CRC-16 | Optional AES-128-CTR |
 | TCX3 | Same as TCX2 | Optional AES-128-CTR |
 | TCX4 | Same as TCX2 | Optional AES-128-CTR |
 
 TCX2/3/4 share one wire format and differ only in which parameters the bike supports. The `BLEProfile` enum (`TCU1` / `TCX`) controls which GATT UUIDs to use.
+
+For encrypted bikes, only packet bytes 2–17 are encrypted. The parameter ID
+and CRC remain clear. The wrapped per-bike key comes from Specialized's cloud,
+while `SYSTEM_GET_NEW_VI` supplies a fresh session IV at connection time.
 
 See [docs/protocol.md](docs/protocol.md) for the full spec.
 

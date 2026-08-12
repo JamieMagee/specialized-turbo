@@ -2,19 +2,25 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
 import pytest
 from bleak.backends.characteristic import BleakGATTCharacteristic
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 import specialized_turbo.connection as connection_module
 from specialized_turbo.connection import SpecializedConnection
+from specialized_turbo.encryption import PRODUCTION_WRAPPING_KEY
 from specialized_turbo.framing import is_nak_packet, pack_tcx, unpack_tcx
+from specialized_turbo.key_provider import EncryptionKeyRequiredError
 from specialized_turbo.protocol import (
     BLEProfile,
     BLEServiceID,
+    BikeAdvertisement,
+    ProtocolEncryptionMethod,
     get_service_characteristics,
 )
 from specialized_turbo.telemetry import TelemetryMonitor
@@ -105,7 +111,19 @@ class _FakeBleakClient:
 
 @pytest.fixture
 def fake_bleak(monkeypatch: pytest.MonkeyPatch) -> type[_FakeBleakClient]:
+    async def no_advertisement(
+        _address: str,
+        timeout: float = 10.0,
+    ) -> None:
+        del timeout
+        return None
+
     monkeypatch.setattr(connection_module, "BleakClient", _FakeBleakClient)
+    monkeypatch.setattr(
+        connection_module,
+        "find_bike_advertisement_by_address",
+        no_advertisement,
+    )
     return _FakeBleakClient
 
 
@@ -133,18 +151,57 @@ async def test_tcx_connect_identifies_without_gatt_reads(
 
     identification = [unpack_tcx(packet) for _, packet, _ in client.writes[:7]]
     assert [int.from_bytes(packet[:2], "big") for packet in identification] == [
-        300,
-        310,
-        363,
+        301,
+        311,
+        364,
         14,
-        308,
-        329,
-        290,
+        309,
+        330,
+        291,
     ]
     assert all(response is False for _, _, response in client.writes[:7])
     assert all(not is_nak_packet(packet) for packet in identification)
 
     await connection.disconnect()
+
+
+async def test_encrypted_advertisement_requires_key_provider() -> None:
+    connection = SpecializedConnection(
+        "AA:BB:CC:DD:EE:FF",
+        advertisement=BikeAdvertisement(
+            generation=BLEProfile.TCX,
+            encryption=ProtocolEncryptionMethod.AES_CTR,
+            hmi_serial="123456789",
+            hmi_hardware="3.2.1",
+        ),
+    )
+
+    with pytest.raises(EncryptionKeyRequiredError):
+        await connection._prepare_encryption()
+
+
+async def test_manual_wrapped_key_is_resolved_before_connection() -> None:
+    expected = bytes.fromhex("00112233445566778899aabbccddeeff")
+    wrapping_iv = bytes(range(16))
+    cipher = Cipher(
+        algorithms.AES(PRODUCTION_WRAPPING_KEY),
+        modes.CTR(wrapping_iv),
+    )
+    encryptor = cipher.encryptor()
+    encrypted = encryptor.update(expected.hex().encode()) + encryptor.finalize()
+    wrapped_key = base64.b64encode(wrapping_iv + encrypted).decode()
+    connection = SpecializedConnection(
+        "AA:BB:CC:DD:EE:FF",
+        advertisement=BikeAdvertisement(
+            generation=BLEProfile.TCX,
+            encryption=ProtocolEncryptionMethod.AES_CTR,
+            hmi_serial="123456789",
+            hmi_hardware="3.2.1",
+        ),
+        wrapped_key=wrapped_key,
+    )
+
+    assert await connection._prepare_encryption() == expected
 
 
 @pytest.mark.asyncio
@@ -173,7 +230,7 @@ async def test_tcx_read_and_stream_control_use_notifications(
     data_service = get_service_characteristics(BLEProfile.TCX, BLEServiceID.DATA)
     enable_characteristic, enable_packet, enable_response = client.writes[-1]
     assert enable_characteristic == data_service.write
-    assert unpack_tcx(enable_packet)[:3] == bytes.fromhex("015a01")
+    assert unpack_tcx(enable_packet)[:3] == bytes.fromhex("015b01")
     assert enable_response is False
 
     telemetry_packet = pack_tcx(bytes.fromhex("001a31"))
@@ -183,7 +240,7 @@ async def test_tcx_read_and_stream_control_use_notifications(
     await connection.unsubscribe_notifications()
     disable_characteristic, disable_packet, disable_response = client.writes[-1]
     assert disable_characteristic == data_service.write
-    assert unpack_tcx(disable_packet)[:3] == bytes.fromhex("015a00")
+    assert unpack_tcx(disable_packet)[:3] == bytes.fromhex("015b00")
     assert disable_response is False
 
     await connection.disconnect()

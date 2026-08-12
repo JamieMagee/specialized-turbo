@@ -14,12 +14,12 @@ import logging
 
 from bleak import BleakClient
 
-from .encryption import derive_key
 from .framing import (
     is_framed_packet,
     is_nak_packet,
     parse_nak_packet,
 )
+from .key_provider import EncryptionKeyRequiredError
 from .models import TelemetrySnapshot
 from .parameters import BikeParameter
 from .protocol import (
@@ -132,15 +132,14 @@ async def poll_tcx(
 
 async def identify_tcx(
     transport: TCXNotificationTransport,
+    *,
+    bike_key: bytes | None = None,
+    encryption_required: bool = False,
 ) -> TCXSession:
     """Run the TCX identification handshake and return a session.
 
-    Executes the full 7-step identification sequence.  Step 4 may
-    return encryption key material.  Returns an encrypted
-    :class:`TCXSession` if a key is found, or an unencrypted one
-    otherwise.
-
-    If the handshake fails, returns an unencrypted session.
+    The first request is clear and returns the 16-byte session IV. When
+    *bike_key* is provided, subsequent identification requests are encrypted.
     """
     steps = [
         BikeParameter.SYSTEM_GET_NEW_VI,
@@ -152,10 +151,8 @@ async def identify_tcx(
         BikeParameter.SYSTEM_EBIKE_SERIAL_NUMBER,
     ]
 
-    key_response: bytes | None = None
-
     try:
-        for param in steps:
+        for index, param in enumerate(steps):
             inner = await transport.request_parameter(int(param))
 
             if is_nak_packet(inner):
@@ -168,47 +165,42 @@ async def identify_tcx(
                     echoed,
                     reason,
                 )
+                if encryption_required:
+                    raise EncryptionKeyRequiredError(
+                        f"Encrypted identification step {int(param)} was rejected"
+                    )
                 continue
 
-            if param == BikeParameter.BATTERY1_FIRMWARE:
-                key_response = inner
-    except Exception:
+            if index == 0:
+                iv = inner[2:18]
+                if len(iv) != 16:
+                    if encryption_required:
+                        raise EncryptionKeyRequiredError(
+                            f"Expected a 16-byte session IV, got {len(iv)}"
+                        )
+                    logger.warning(
+                        "Invalid TCX session IV length %d; using unencrypted session",
+                        len(iv),
+                    )
+                    continue
+                if bike_key is not None:
+                    transport.session = TCXSession(key=bike_key, iv=iv)
+    except EncryptionKeyRequiredError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        if encryption_required:
+            raise EncryptionKeyRequiredError(
+                "Encrypted TCX identification failed"
+            ) from exc
         logger.warning(
             "TCX identification handshake failed, using unencrypted session",
             exc_info=True,
         )
         return TCXSession()
 
-    if key_response is None or len(key_response) < 4:
-        return TCXSession()
-
-    # key_response is the inner payload with CRC and any NAK already
-    # filtered above.  Skip the 2-byte param ID to reach key material.
-    key_data = key_response[2:].rstrip(b"\x00")
-
-    if len(key_data) == 0:
-        logger.debug(
-            "Encryption key response was empty — bike may not require encryption"
+    session = transport.session
+    if encryption_required and not session.encrypted:
+        raise EncryptionKeyRequiredError(
+            "Bike requires encryption but no encrypted session was established"
         )
-        return TCXSession()
-
-    # A valid base64 encryption key is 64 chars (~48 decoded bytes).
-    # Short responses (e.g. a single firmware-version byte) are not keys.
-    if len(key_data) < 20:
-        logger.debug(
-            "Key response too short for encryption (%d bytes) "
-            "— bike does not require encryption",
-            len(key_data),
-        )
-        return TCXSession()
-
-    try:
-        aes_key = derive_key(key_data.decode("ascii"))
-        logger.info("TCX encryption key derived, using encrypted session")
-        return TCXSession(key=aes_key, iv=b"\x00" * 16)
-    except Exception:
-        logger.warning(
-            "Failed to derive encryption key, using unencrypted session",
-            exc_info=True,
-        )
-        return TCXSession()
+    return session

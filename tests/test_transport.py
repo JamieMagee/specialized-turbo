@@ -10,6 +10,7 @@ import pytest
 from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
+from specialized_turbo.coordinator_helpers import identify_tcx
 from specialized_turbo.framing import pack_tcx, unpack_tcx
 from specialized_turbo.protocol import (
     BLEProfile,
@@ -90,8 +91,8 @@ def _transport(
 
 
 def test_identification_frame_matches_official_app() -> None:
-    frame = TCXSession().pack(build_tcx_request(300))
-    assert frame.hex() == "012c00000000000000000000000000000000004d"
+    frame = TCXSession().pack(build_tcx_request(301))
+    assert frame.hex() == "012d00000000000000000000000000000000e25d"
 
 
 @pytest.mark.asyncio
@@ -134,6 +135,40 @@ async def test_request_writes_framed_packet_and_awaits_notification() -> None:
     assert message.field_name == "battery_charge_percent"
     assert message.converted_value == 49
     assert client.writes[0][2] is False
+
+
+@pytest.mark.asyncio
+async def test_identification_installs_iv_before_encrypted_steps() -> None:
+    client = _FakeClient()
+    transport = _transport(client)
+    key = bytes.fromhex("00112233445566778899aabbccddeeff")
+    iv = bytes.fromhex("ffeeddccbbaa99887766554433221100")
+    encrypted_session = TCXSession(key=key, iv=iv)
+    seen_params: list[int] = []
+
+    def respond(_characteristic: str, packet: bytes) -> None:
+        if not seen_params:
+            payload = TCXSession().unpack(packet)
+            param_id = int.from_bytes(payload[:2], "big")
+            assert param_id == 301
+            response = TCXSession().pack(payload[:2] + iv)
+        else:
+            payload = encrypted_session.unpack(packet)
+            param_id = int.from_bytes(payload[:2], "big")
+            response = encrypted_session.pack(payload[:2] + b"\x01")
+        seen_params.append(param_id)
+        client.notify(BLEServiceID.REQUEST, response)
+
+    client.on_write = respond
+
+    session = await identify_tcx(
+        transport,
+        bike_key=key,
+        encryption_required=True,
+    )
+
+    assert session.encrypted
+    assert seen_params == [301, 311, 364, 14, 309, 330, 291]
 
 
 @pytest.mark.asyncio
@@ -207,7 +242,7 @@ async def test_realtime_enable_uses_service_three_write() -> None:
     service = get_service_characteristics(BLEProfile.TCX, BLEServiceID.DATA)
     characteristic, packet, response = client.writes[-1]
     assert characteristic == service.write
-    assert unpack_tcx(packet)[:3] == bytes.fromhex("015a01")
+    assert unpack_tcx(packet)[:3] == bytes.fromhex("015b01")
     assert response is False
 
 

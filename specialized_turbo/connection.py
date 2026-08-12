@@ -16,15 +16,24 @@ from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
 from .coordinator_helpers import identify_tcx
+from .key_provider import (
+    EncryptionKeyProvider,
+    EncryptionKeyRequiredError,
+    StaticKeyProvider,
+    resolve_bike_key,
+)
 from .protocol import (
     BLEProfile,
+    BikeAdvertisement,
     ParsedMessage,
+    ProtocolEncryptionMethod,
     build_request,
     get_char_notify,
     get_char_request_read,
     get_char_request_write,
     get_char_write,
     is_specialized_advertisement,
+    parse_bike_advertisement,
     parse_message,
     parse_tcx_message,
 )
@@ -55,11 +64,17 @@ async def scan_for_bikes(
     found: list[tuple[BLEDevice, AdvertisementData]] = []
 
     def _detection_callback(device: BLEDevice, adv: AdvertisementData) -> None:
-        if is_specialized_advertisement(adv.manufacturer_data) and not any(
-            d.address == device.address for d, _ in found
+        if is_specialized_advertisement(
+            adv.manufacturer_data,
+            local_name=adv.local_name or device.name,
+            service_uuids=adv.service_uuids,
         ):
-            logger.info("Found Specialized bike: %s (%s)", device.name, device.address)
-            found.append((device, adv))
+            # Avoid duplicates
+            if not any(d.address == device.address for d, _ in found):
+                logger.info(
+                    "Found Specialized bike: %s (%s)", device.name, device.address
+                )
+                found.append((device, adv))
 
     scanner = BleakScanner(detection_callback=_detection_callback)
     await scanner.start()
@@ -75,6 +90,36 @@ async def find_bike_by_address(
     """Scan for a specific bike by MAC address. Returns None if not found."""
     device = await BleakScanner.find_device_by_address(address, timeout=timeout)
     return device
+
+
+async def find_bike_advertisement_by_address(
+    address: str,
+    timeout: float = 10.0,
+) -> tuple[BLEDevice, AdvertisementData, BikeAdvertisement] | None:
+    """Scan for one bike and return its decoded advertisement metadata."""
+    result: asyncio.Future[tuple[BLEDevice, AdvertisementData, BikeAdvertisement]] = (
+        asyncio.get_running_loop().create_future()
+    )
+
+    def _detection_callback(device: BLEDevice, adv: AdvertisementData) -> None:
+        if device.address.casefold() != address.casefold() or result.done():
+            return
+        advertisement = parse_bike_advertisement(
+            adv.manufacturer_data,
+            local_name=adv.local_name or device.name,
+            service_uuids=adv.service_uuids,
+        )
+        if advertisement is not None:
+            result.set_result((device, adv, advertisement))
+
+    scanner = BleakScanner(detection_callback=_detection_callback)
+    await scanner.start()
+    try:
+        return await asyncio.wait_for(result, timeout)
+    except TimeoutError:
+        return None
+    finally:
+        await scanner.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +147,10 @@ class SpecializedConnection:
         *,
         pin: str | None = None,
         generation: BLEProfile = BLEProfile.TCX,
+        advertisement: BikeAdvertisement | None = None,
+        key_provider: EncryptionKeyProvider | None = None,
+        wrapped_key: str | None = None,
+        discovery_timeout: float = 10.0,
         disconnect_callback: Callable[[BleakClient], None] | None = None,
         trace_callback: TraceCallback | None = None,
     ) -> None:
@@ -116,18 +165,35 @@ class SpecializedConnection:
         generation :
             Protocol generation (TCU1 or TCX).  Determines which
             GATT UUIDs to use.  Defaults to TCX.
+        advertisement :
+            Decoded manufacturer metadata. When omitted, the connection scans
+            for it before connecting.
+        key_provider :
+            Provider used to retrieve the wrapped key for AES bikes.
+        wrapped_key :
+            Manual wrapped key. Mutually exclusive with *key_provider*.
+        discovery_timeout :
+            Seconds to wait for advertisement metadata before connecting.
         disconnect_callback :
             Optional callback invoked if the bike disconnects unexpectedly.
         trace_callback :
             Optional callback receiving every raw TCX write and notification.
         """
+        if key_provider is not None and wrapped_key is not None:
+            raise ValueError("key_provider and wrapped_key are mutually exclusive")
         self._address = address_or_device
         self._pin = pin
+        self._advertisement = advertisement
+        self._key_provider = (
+            StaticKeyProvider(wrapped_key) if wrapped_key is not None else key_provider
+        )
+        self._discovery_timeout = discovery_timeout
         self._generation = generation
-        self._char_notify = get_char_notify(generation)
-        self._char_request_read = get_char_request_read(generation)
-        self._char_request_write = get_char_request_write(generation)
-        self._char_write = get_char_write(generation)
+        self._char_notify = ""
+        self._char_request_read = ""
+        self._char_request_write = ""
+        self._char_write = ""
+        self._set_generation(generation)
         self._client: BleakClient | None = None
         self._session: ProtocolSession = TCU1Session()
         self._disconnect_cb = disconnect_callback
@@ -150,6 +216,8 @@ class SpecializedConnection:
     async def connect(self) -> None:
         """Establish the BLE connection and trigger pairing if needed."""
         logger.info("Connecting to %s ...", self._address)
+
+        bike_key = await self._prepare_encryption()
 
         self._client = BleakClient(
             self._address,
@@ -200,7 +268,15 @@ class SpecializedConnection:
                 trace_callback=self._trace_callback,
             )
             await self._tcx_transport.subscribe_for_identification()
-            session = await identify_tcx(self._tcx_transport)
+            encryption_required = (
+                self._advertisement is not None
+                and self._advertisement.encryption == ProtocolEncryptionMethod.AES_CTR
+            )
+            session = await identify_tcx(
+                self._tcx_transport,
+                bike_key=bike_key,
+                encryption_required=encryption_required,
+            )
             self._session = session
             self._tcx_transport.session = session
             await self._tcx_transport.subscribe_for_realtime()
@@ -208,6 +284,50 @@ class SpecializedConnection:
             self._session = TCU1Session()
 
         logger.info("Connection established to %s", self._address)
+
+    def _set_generation(self, generation: BLEProfile) -> None:
+        self._generation = generation
+        self._char_notify = get_char_notify(generation)
+        self._char_request_read = get_char_request_read(generation)
+        self._char_request_write = get_char_request_write(generation)
+        self._char_write = get_char_write(generation)
+
+    async def _prepare_encryption(self) -> bytes | None:
+        if self._advertisement is None:
+            address = (
+                self._address
+                if isinstance(self._address, str)
+                else self._address.address
+            )
+            discovered = await find_bike_advertisement_by_address(
+                address,
+                timeout=self._discovery_timeout,
+            )
+            if discovered is not None:
+                device, _raw_advertisement, advertisement = discovered
+                self._address = device
+                self._advertisement = advertisement
+                self._set_generation(advertisement.generation)
+
+        advertisement = self._advertisement
+        if (
+            advertisement is None
+            or advertisement.encryption != ProtocolEncryptionMethod.AES_CTR
+        ):
+            return None
+        if advertisement.hmi_hardware is None or advertisement.hmi_serial is None:
+            raise EncryptionKeyRequiredError(
+                "Encrypted bike advertisement is missing HMI identifiers"
+            )
+        if self._key_provider is None:
+            raise EncryptionKeyRequiredError(
+                "Bike requires an encryption key provider or wrapped key"
+            )
+        return await resolve_bike_key(
+            self._key_provider,
+            hmi_hardware=advertisement.hmi_hardware,
+            hmi_serial=advertisement.hmi_serial,
+        )
 
     async def disconnect(self) -> None:
         """Cleanly disconnect from the bike."""

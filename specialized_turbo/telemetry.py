@@ -17,6 +17,7 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 from .connection import SpecializedConnection
 from .coordinator_helpers import TCX_POLL_PARAMS
 from .framing import is_realtime_packet
+from .key_provider import EncryptionKeyProvider
 from .models import TelemetrySnapshot
 from .protocol import ParsedMessage, parse_message, parse_tcx_message
 from .session import TCXSession
@@ -184,6 +185,8 @@ async def run_telemetry_session(
     duration: float = 0,
     output_format: str = "table",
     output_callback: Callable[[str], None] | None = None,
+    key_provider: EncryptionKeyProvider | None = None,
+    wrapped_key: str | None = None,
 ) -> TelemetrySnapshot:
     """
     Connect, print telemetry for a while, and return the final snapshot.
@@ -192,7 +195,12 @@ async def run_telemetry_session(
     """
     printer = output_callback or print
 
-    async with SpecializedConnection(address, pin=pin) as conn:
+    async with SpecializedConnection(
+        address,
+        pin=pin,
+        key_provider=key_provider,
+        wrapped_key=wrapped_key,
+    ) as conn:
         monitor = TelemetryMonitor(conn)
 
         def _on_update(msg: ParsedMessage, snap: TelemetrySnapshot) -> None:

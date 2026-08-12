@@ -29,7 +29,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=9.0.2", "pytest-asyncio>=1.3.0"]
+cloud = ["httpx>=0.27.0"]
+dev = ["httpx>=0.27.0", "pytest>=9.0.2", "pytest-asyncio>=1.3.0"]
 
 [project.scripts]
 specialized-turbo = "specialized_turbo.cli:main"

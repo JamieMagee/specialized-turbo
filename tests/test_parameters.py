@@ -18,18 +18,18 @@ class TestBikeParameterEnum:
         assert BikeParameter.BATTERY1_STATE_OF_CHARGE == 26
 
     def test_motor_speed(self):
-        assert BikeParameter.MOTOR_BIKE_SPEED == 148
+        assert BikeParameter.MOTOR_BIKE_SPEED == 149
 
     def test_system_state(self):
-        assert BikeParameter.SYSTEM_STATE == 363
+        assert BikeParameter.SYSTEM_STATE == 364
 
     def test_get_new_vi(self):
         """Special identification parameter."""
-        assert BikeParameter.SYSTEM_GET_NEW_VI == 300
+        assert BikeParameter.SYSTEM_GET_NEW_VI == 301
 
     def test_total_members(self):
-        """Regression guard: 354 parameters + SYSTEM_GET_NEW_VI = 355 total."""
-        assert len(BikeParameter) == 355
+        """Regression guard for the app enum plus two native-only parameters."""
+        assert len(BikeParameter) == 353
 
 
 class TestEncodeDecodeParameterId:
@@ -39,9 +39,9 @@ class TestEncodeDecodeParameterId:
         assert result == b"\x00\x1a"
 
     def test_encode_system_state(self):
-        # BikeParameter 363 = 0x016B → big-endian: 01 6b
-        result = encode_parameter_id(363)
-        assert result == b"\x01\x6b"
+        # BikeParameter 364 = 0x016C → big-endian: 01 6c
+        result = encode_parameter_id(364)
+        assert result == b"\x01\x6c"
 
     def test_decode_round_trip(self):
         for param_id in [0, 1, 26, 148, 300, 363, 414]:

@@ -1,30 +1,36 @@
-"""
-AES-128-CTR encryption for Specialized Turbo TCX2/TCX3/TCX4 protocols.
+"""AES-128-CTR support for Specialized Turbo TCX2+ protocols.
 
-Packets are 20 bytes after CRC framing.  The encryption layout is:
+CRC-framed packets use this wire layout::
 
-    [param_id: 2B] [encrypted_body: 16B] [encrypted_tail: 2B]
+    [parameter ID: 2B clear] [payload: 16B encrypted] [CRC-16: 2B clear]
 
-Bytes 0-1 (the parameter ID) are sent in the clear.  Bytes 2-17 and 18-19
-are encrypted with AES-128-CTR using a per-session key and IV.
-
-Not all packets are encrypted: NAK (``0x0A``) and F8 FF-prefixed packets
-are always transmitted in the clear.
+The per-bike AES key is returned by Specialized's keystore service as a
+64-character wrapped value. The bike provides a fresh packet IV through
+``SYSTEM_GET_NEW_VI`` during identification.
 """
 
 from __future__ import annotations
 
 import base64
-import logging
-
+import binascii
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from .framing import FRAMED_PACKET_SIZE, NAK_BYTE
 
-logger = logging.getLogger(__name__)
-
-# Header bytes that indicate a packet should NOT be encrypted
 _CLEAR_PREFIX = b"\xf8\xff"
+PRODUCTION_WRAPPING_KEY = b"nZr4u7x!A%D*G-Ka"
+STAGING_WRAPPING_KEY = b"/A?D(G+KbPeShVmY"
+_WRAPPED_KEY_LENGTH = 64
+_DECODED_WRAPPED_KEY_LENGTH = 48
+_AES_BLOCK_SIZE = 16
+
+
+class EncryptionError(ValueError):
+    """Base error for invalid Specialized encryption material."""
+
+
+class WrappedKeyError(EncryptionError):
+    """Raised when a keystore response cannot be unwrapped."""
 
 
 def is_encryptable(data: bytes | bytearray) -> bool:
@@ -38,6 +44,10 @@ def is_encryptable(data: bytes | bytearray) -> bool:
 
 def _aes_ctr_crypt(key: bytes, iv: bytes, data: bytes) -> bytes:
     """AES-128-CTR encrypt or decrypt (symmetric operation)."""
+    if len(key) != _AES_BLOCK_SIZE:
+        raise EncryptionError(f"Expected a 16-byte AES key, got {len(key)}")
+    if len(iv) != _AES_BLOCK_SIZE:
+        raise EncryptionError(f"Expected a 16-byte AES IV, got {len(iv)}")
     cipher = Cipher(algorithms.AES(key), modes.CTR(iv))
     encryptor = cipher.encryptor()
     return encryptor.update(data) + encryptor.finalize()
@@ -47,8 +57,8 @@ def encrypt_packet(key: bytes, iv: bytes, data: bytes | bytearray) -> bytes:
     """
     Encrypt a 20-byte CRC-framed TCX packet.
 
-    The 2-byte header (parameter ID) is preserved in the clear.
-    Bytes 2-19 are encrypted with AES-128-CTR.
+    The 2-byte parameter ID and trailing 2-byte CRC are preserved in the clear.
+    Only bytes 2-17 are encrypted with AES-128-CTR.
 
     Returns the encrypted 20-byte packet.
     """
@@ -56,18 +66,17 @@ def encrypt_packet(key: bytes, iv: bytes, data: bytes | bytearray) -> bytes:
         raise ValueError(f"Expected {FRAMED_PACKET_SIZE} bytes, got {len(data)}")
     if not is_encryptable(data):
         return bytes(data)
-    header = bytes(data[:2])
-    body = bytes(data[2:])
-    encrypted_body = _aes_ctr_crypt(key, iv, body)
-    return header + encrypted_body
+    return (
+        bytes(data[:2]) + _aes_ctr_crypt(key, iv, bytes(data[2:18])) + bytes(data[18:])
+    )
 
 
 def decrypt_packet(key: bytes, iv: bytes, data: bytes | bytearray) -> bytes:
     """
     Decrypt a 20-byte encrypted TCX packet.
 
-    The 2-byte header (parameter ID) is already in the clear.
-    Bytes 2-19 are decrypted with AES-128-CTR.
+    The 2-byte parameter ID and trailing 2-byte CRC are already in the clear.
+    Only bytes 2-17 are decrypted with AES-128-CTR.
 
     Returns the decrypted 20-byte packet.
     """
@@ -75,36 +84,46 @@ def decrypt_packet(key: bytes, iv: bytes, data: bytes | bytearray) -> bytes:
         raise ValueError(f"Expected {FRAMED_PACKET_SIZE} bytes, got {len(data)}")
     if not is_encryptable(data):
         return bytes(data)
-    header = bytes(data[:2])
-    body = bytes(data[2:])
-    decrypted_body = _aes_ctr_crypt(key, iv, body)
-    return header + decrypted_body
+    return (
+        bytes(data[:2]) + _aes_ctr_crypt(key, iv, bytes(data[2:18])) + bytes(data[18:])
+    )
+
+
+def unwrap_keystore_key(
+    wrapped_key: str,
+    *,
+    wrapping_key: bytes = PRODUCTION_WRAPPING_KEY,
+) -> bytes:
+    """Unwrap a 64-character key returned by Specialized's keystore service."""
+    if len(wrapped_key) != _WRAPPED_KEY_LENGTH:
+        raise WrappedKeyError(
+            f"Expected a 64-character wrapped key, got {len(wrapped_key)}"
+        )
+
+    try:
+        raw = base64.b64decode(wrapped_key, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise WrappedKeyError("Wrapped key is not valid base64") from exc
+
+    if len(raw) != _DECODED_WRAPPED_KEY_LENGTH:
+        raise WrappedKeyError(f"Expected 48 decoded bytes, got {len(raw)}")
+
+    wrapping_iv = raw[:_AES_BLOCK_SIZE]
+    encrypted_hex_key = raw[_AES_BLOCK_SIZE:]
+    decrypted_hex = _aes_ctr_crypt(wrapping_key, wrapping_iv, encrypted_hex_key)
+
+    try:
+        key = bytes.fromhex(decrypted_hex.decode("ascii"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise WrappedKeyError(
+            "Wrapped key did not decrypt to an ASCII hex key"
+        ) from exc
+
+    if len(key) != _AES_BLOCK_SIZE:
+        raise WrappedKeyError(f"Expected a 16-byte bike key, got {len(key)}")
+    return key
 
 
 def derive_key(base64_key: str) -> bytes:
-    """
-    Derive the AES-128 encryption key from the bike's BTEncryptionInfo.
-
-    The *base64_key* is a 64-character base64-encoded string from the bike's
-    advertisement data.  Key derivation:
-
-    1. Base64-decode the 64-char string (→ 48 raw bytes).
-    2. First 16 bytes are the intermediate AES key.
-    3. Remaining bytes are AES-CTR encrypted with the intermediate key.
-    4. Decrypt them, then hex-decode the result → final 16-byte AES key.
-    """
-    raw = base64.b64decode(base64_key)
-    if len(raw) < 17:
-        raise ValueError(
-            f"Base64-decoded key too short ({len(raw)} bytes), need at least 17"
-        )
-    intermediate_key = raw[:16]
-    encrypted_rest = raw[16:]
-    # Decrypt with a zero IV (the native code uses the iv_vector parameter,
-    # which is set to zeros during key derivation)
-    iv = b"\x00" * 16
-    decrypted_hex = _aes_ctr_crypt(intermediate_key, iv, encrypted_rest)
-    try:
-        return bytes.fromhex(decrypted_hex.decode("ascii"))
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise ValueError(f"Key derivation failed: {exc}") from exc
+    """Compatibility alias for :func:`unwrap_keystore_key`."""
+    return unwrap_keystore_key(base64_key)

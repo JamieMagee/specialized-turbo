@@ -14,9 +14,10 @@ only the BLE UUIDs and advertisement data differ.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
+import re
+from collections.abc import Callable, Iterable
 from typing import NamedTuple
 
 # ---------------------------------------------------------------------------
@@ -29,6 +30,13 @@ class BLEProfile(StrEnum):
 
     TCU1 = "tcu1"  # 2018 Levo (Gigatronik TCU, Simplo mfr ID)
     TCX = "tcx"  # 2019+ Vado/Levo/Creo (TURBOHMI2017, Nordic mfr ID)
+
+
+class ProtocolEncryptionMethod(IntEnum):
+    """Application-layer encryption declared by a bike advertisement."""
+
+    NONE = 0
+    AES_CTR = 1
 
 
 class BLEServiceID(IntEnum):
@@ -197,6 +205,30 @@ ADVERTISING_MAGIC = b"TURBOHMI"
 
 # Standard Bluetooth Cycling Speed and Cadence service (TCU1 bikes may advertise)
 CYCLING_SPEED_CADENCE_SERVICE = "00001816-0000-1000-8000-00805f9b34fb"
+_SPECIALIZED_NAME_PATTERN = re.compile(
+    r"^(?:SPECIALIZED(?:\s?[A-Z\d]+)?|(?:WSBC)?\d{3,9}[A-Z])"
+    r"(?:\s-\sFind My)?$",
+    re.IGNORECASE,
+)
+_TCX_SERVICE_UUIDS = {
+    SERVICE_DATA_REQUEST.lower(),
+    SERVICE_DATA_WRITE.lower(),
+    SERVICE_DATA_NOTIFY.lower(),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class BikeAdvertisement:
+    """Protocol metadata decoded from BLE manufacturer data."""
+
+    generation: BLEProfile
+    encryption: ProtocolEncryptionMethod = ProtocolEncryptionMethod.NONE
+    hmi_serial: str | None = None
+    hmi_hardware: str | None = None
+    bike_type: int | None = None
+    system_state: int | None = None
+    reserved: int | None = None
+
 
 # ---------------------------------------------------------------------------
 # Protocol enums
@@ -504,18 +536,77 @@ def parse_message(data: bytes | bytearray) -> ParsedMessage:
         )
 
 
-def is_specialized_advertisement(manufacturer_data: dict[int, bytes]) -> bool:
+def is_specialized_advertisement(
+    manufacturer_data: dict[int, bytes],
+    *,
+    local_name: str | None = None,
+    service_uuids: Iterable[str] | None = None,
+) -> bool:
     """
     Check if BLE manufacturer data belongs to a Specialized Turbo bike.
 
     Detects both TCX (Nordic company ID + TURBOHMI magic) and
     TCU1 (Simplo Technology company ID) bikes.
     """
-    return detect_generation(manufacturer_data) is not None
+    return (
+        parse_bike_advertisement(
+            manufacturer_data,
+            local_name=local_name,
+            service_uuids=service_uuids,
+        )
+        is not None
+    )
+
+
+def parse_bike_advertisement(
+    manufacturer_data: dict[int, bytes],
+    *,
+    local_name: str | None = None,
+    service_uuids: Iterable[str] | None = None,
+) -> BikeAdvertisement | None:
+    """Decode Specialized protocol metadata from BLE manufacturer data."""
+    nordic_payload = manufacturer_data.get(NORDIC_COMPANY_ID)
+    if nordic_payload is not None:
+        has_specialized_identity = (
+            isinstance(local_name, str)
+            and _SPECIALIZED_NAME_PATTERN.fullmatch(local_name) is not None
+        ) or any(
+            isinstance(uuid, str) and uuid.lower() in _TCX_SERVICE_UUIDS
+            for uuid in service_uuids or ()
+        )
+        if len(nordic_payload) == 10 and has_specialized_identity:
+            return BikeAdvertisement(
+                generation=BLEProfile.TCX,
+                encryption=ProtocolEncryptionMethod.AES_CTR,
+                hmi_serial=str(int.from_bytes(nordic_payload[:4], "little")),
+                hmi_hardware=".".join(str(value) for value in nordic_payload[4:7]),
+                reserved=nordic_payload[7],
+                bike_type=nordic_payload[8],
+                system_state=nordic_payload[9],
+            )
+        if ADVERTISING_MAGIC in nordic_payload:
+            return BikeAdvertisement(generation=BLEProfile.TCX)
+
+    apple_payload = manufacturer_data.get(APPLE_COMPANY_ID)
+    if apple_payload is not None and ADVERTISING_MAGIC in apple_payload:
+        return BikeAdvertisement(generation=BLEProfile.TCX)
+
+    for company_id, payload in manufacturer_data.items():
+        if company_id not in {NORDIC_COMPANY_ID, APPLE_COMPANY_ID}:
+            if ADVERTISING_MAGIC in payload:
+                return BikeAdvertisement(generation=BLEProfile.TCX)
+
+    if SIMPLO_COMPANY_ID in manufacturer_data:
+        return BikeAdvertisement(generation=BLEProfile.TCU1)
+
+    return None
 
 
 def detect_generation(
     manufacturer_data: dict[int, bytes],
+    *,
+    local_name: str | None = None,
+    service_uuids: Iterable[str] | None = None,
 ) -> BLEProfile | None:
     """
     Determine the protocol generation from BLE manufacturer advertisement data.
@@ -524,16 +615,12 @@ def detect_generation(
     ``BLEProfile.TCU1`` for Simplo Technology advertisements,
     or ``None`` if the data does not match a known Specialized bike.
     """
-    # TCX: TURBOHMI magic in any manufacturer data payload.
-    # Most bikes use Nordic (0x0059), but some (e.g. Vado 3.0) put it
-    # in an Apple iBeacon frame (0x004C) instead.
-    for payload in manufacturer_data.values():
-        if ADVERTISING_MAGIC in payload:
-            return BLEProfile.TCX
-    # TCU1: Simplo Technology company ID
-    if SIMPLO_COMPANY_ID in manufacturer_data:
-        return BLEProfile.TCU1
-    return None
+    advertisement = parse_bike_advertisement(
+        manufacturer_data,
+        local_name=local_name,
+        service_uuids=service_uuids,
+    )
+    return advertisement.generation if advertisement is not None else None
 
 
 # ---------------------------------------------------------------------------

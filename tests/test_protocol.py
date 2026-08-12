@@ -8,6 +8,26 @@ reference implementation and the Micheledv74/turbolevo-pwa dashboard.
 import pytest
 
 from specialized_turbo.protocol import (
+    AssistLevel,
+    BatteryChannel,
+    MotorChannel,
+    BikeSettingsChannel,
+    BLEProfile,
+    BLEServiceID,
+    ProtocolEncryptionMethod,
+    Sender,
+    _uuid,
+    _uuid_tcu1,
+    all_field_defs,
+    build_request,
+    detect_generation,
+    get_char_notify,
+    get_service_characteristics,
+    get_field_def,
+    get_uuid,
+    is_specialized_advertisement,
+    parse_bike_advertisement,
+    parse_message,
     CHAR_NOTIFY,
     CHAR_NOTIFY_TCU1,
     CHAR_REQUEST_READ,
@@ -24,24 +44,6 @@ from specialized_turbo.protocol import (
     SERVICE_DATA_WRITE,
     SERVICE_DATA_WRITE_TCU1,
     SIMPLO_COMPANY_ID,
-    AssistLevel,
-    BatteryChannel,
-    BikeSettingsChannel,
-    BLEProfile,
-    BLEServiceID,
-    MotorChannel,
-    Sender,
-    _uuid,
-    _uuid_tcu1,
-    all_field_defs,
-    build_request,
-    detect_generation,
-    get_char_notify,
-    get_field_def,
-    get_service_characteristics,
-    get_uuid,
-    is_specialized_advertisement,
-    parse_message,
 )
 
 # ======================================================================
@@ -533,6 +535,28 @@ class TestAdvertising:
         payload = bytes.fromhex("545552424f484d493230313701000000")
         assert is_specialized_advertisement({0x1234: payload}) is True
 
+    def test_parses_modern_encrypted_advertisement(self):
+        payload = (123456789).to_bytes(4, "little") + bytes([3, 2, 1, 0, 9, 4])
+
+        advertisement = parse_bike_advertisement(
+            {NORDIC_COMPANY_ID: payload},
+            local_name="SPECIALIZED",
+        )
+
+        assert advertisement is not None
+        assert advertisement.generation == BLEProfile.TCX
+        assert advertisement.encryption == ProtocolEncryptionMethod.AES_CTR
+        assert advertisement.hmi_serial == "123456789"
+        assert advertisement.hmi_hardware == "3.2.1"
+        assert advertisement.reserved == 0
+        assert advertisement.bike_type == 9
+        assert advertisement.system_state == 4
+
+    def test_rejects_wrong_length_modern_advertisement(self):
+        payload = (123456789).to_bytes(4, "little") + bytes([3, 2, 1, 0, 9])
+
+        assert parse_bike_advertisement({NORDIC_COMPANY_ID: payload}) is None
+
     def test_rejects_wrong_payload(self):
         assert is_specialized_advertisement({NORDIC_COMPANY_ID: b"NOT_A_BIKE"}) is False
 
@@ -713,6 +737,16 @@ class TestTCU1Advertising:
     def test_detect_generation_tcx(self):
         payload = bytes.fromhex("545552424f484d493230313701000000")
         assert detect_generation({NORDIC_COMPANY_ID: payload}) == BLEProfile.TCX
+
+    def test_detect_generation_modern_tcx(self):
+        payload = (123456789).to_bytes(4, "little") + bytes([3, 2, 1, 0, 9, 4])
+        assert (
+            detect_generation(
+                {NORDIC_COMPANY_ID: payload},
+                local_name="SPECIALIZED",
+            )
+            == BLEProfile.TCX
+        )
 
     def test_detect_generation_tcx_apple_ibeacon(self):
         """Vado 3.0: TURBOHMI in Apple iBeacon, unrelated data in Nordic."""

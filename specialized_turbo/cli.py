@@ -10,20 +10,33 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import json
 import logging
 import sys
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
-from .connection import SpecializedConnection, scan_for_bikes
+from .connection import (
+    SpecializedConnection,
+    find_bike_advertisement_by_address,
+    scan_for_bikes,
+)
+from .key_provider import EncryptionKeyProvider
 from .parameters import all_tcx_fields
 from .protocol import (
+    ProtocolEncryptionMethod,
     all_field_defs,
 )
 from .telemetry import run_telemetry_session
-from .transport import BLETraceEvent
+from .transport import BLETraceEvent, TraceCallback
+
+
+class CLICommandError(RuntimeError):
+    """A user-facing CLI failure without secret-bearing traceback output."""
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -33,6 +46,89 @@ def _setup_logging(verbose: bool) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+
+
+@asynccontextmanager
+async def _key_provider(
+    args: argparse.Namespace,
+) -> AsyncIterator[EncryptionKeyProvider | None]:
+    cloud = None
+    if getattr(args, "email", None) is not None:
+        try:
+            from .cloud import SpecializedCloudClient
+        except ImportError as exc:
+            raise RuntimeError(
+                "Account key retrieval requires `pip install specialized-turbo[cloud]`"
+            ) from exc
+        cloud = SpecializedCloudClient()
+        await cloud.login(
+            args.email,
+            getpass.getpass("Specialized password: "),
+        )
+
+    try:
+        yield cloud
+    finally:
+        if cloud is not None:
+            await cloud.aclose()
+
+
+@asynccontextmanager
+async def _connection(
+    args: argparse.Namespace,
+    *,
+    trace_callback: TraceCallback | None = None,
+) -> AsyncIterator[SpecializedConnection]:
+    async with _key_provider(args) as provider:
+        async with SpecializedConnection(
+            args.address,
+            pin=args.pin,
+            key_provider=provider,
+            wrapped_key=getattr(args, "wrapped_key", None),
+            trace_callback=trace_callback,
+        ) as connection:
+            yield connection
+
+
+def _add_key_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--wrapped-key", help="64-character wrapped bike key")
+    group.add_argument(
+        "--email",
+        help="Specialized account email; password is prompted securely",
+    )
+
+
+async def _resolve_hmi_identifiers(
+    args: argparse.Namespace,
+) -> tuple[str | None, str, str]:
+    hmi_hardware = args.hmi_hardware
+    hmi_serial = args.hmi_serial
+    if hmi_hardware is not None and hmi_serial is not None:
+        return args.address, hmi_hardware, hmi_serial
+    if args.address is None:
+        raise CLICommandError(
+            "provide a BLE address or both --hmi-hardware and --hmi-serial"
+        )
+
+    discovered = await find_bike_advertisement_by_address(
+        args.address,
+        timeout=args.scan_timeout,
+    )
+    if discovered is None:
+        raise CLICommandError(
+            f"could not find Specialized bike {args.address} during BLE scan"
+        )
+
+    _device, _raw, advertisement = discovered
+    if advertisement.encryption != ProtocolEncryptionMethod.AES_CTR:
+        raise CLICommandError("bike does not advertise the encrypted HMI key metadata")
+
+    hmi_hardware = hmi_hardware or advertisement.hmi_hardware
+    hmi_serial = hmi_serial or advertisement.hmi_serial
+    if hmi_hardware is None or hmi_serial is None:
+        raise CLICommandError("bike advertisement is missing HMI identifiers")
+    return args.address, hmi_hardware, hmi_serial
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +158,56 @@ async def _cmd_scan(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# fetch-key
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_fetch_key(args: argparse.Namespace) -> None:
+    """Retrieve the wrapped encryption key for one bike."""
+    address, hmi_hardware, hmi_serial = await _resolve_hmi_identifiers(args)
+    try:
+        from .cloud import (
+            CloudAuthenticationError,
+            CloudRequestError,
+            SpecializedCloudClient,
+        )
+    except ImportError as exc:
+        raise CLICommandError(
+            "fetch-key requires `pip install specialized-turbo[cloud]`"
+        ) from exc
+
+    try:
+        async with SpecializedCloudClient() as cloud:
+            await cloud.login(
+                args.email,
+                getpass.getpass("Specialized password: "),
+            )
+            wrapped_key = await cloud.get_wrapped_key(
+                hmi_hardware=hmi_hardware,
+                hmi_serial=hmi_serial,
+            )
+    except CloudAuthenticationError as exc:
+        raise CLICommandError("Specialized account authentication failed") from exc
+    except CloudRequestError as exc:
+        raise CLICommandError("Specialized key retrieval failed") from exc
+
+    if args.json_output:
+        print(
+            json.dumps(
+                {
+                    "address": address,
+                    "hmi_hardware": hmi_hardware,
+                    "hmi_serial": hmi_serial,
+                    "wrapped_key": wrapped_key,
+                },
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(wrapped_key)
+
+
+# ---------------------------------------------------------------------------
 # telemetry
 # ---------------------------------------------------------------------------
 
@@ -70,12 +216,15 @@ async def _cmd_telemetry(args: argparse.Namespace) -> None:
     """Connect and stream live telemetry."""
     print(f"Connecting to {args.address} ...")
 
-    snapshot = await run_telemetry_session(
-        args.address,
-        pin=args.pin,
-        duration=args.duration,
-        output_format=args.format,
-    )
+    async with _key_provider(args) as provider:
+        snapshot = await run_telemetry_session(
+            args.address,
+            pin=args.pin,
+            duration=args.duration,
+            output_format=args.format,
+            key_provider=provider,
+            wrapped_key=args.wrapped_key,
+        )
 
     # Print final summary
     print("\n--- Session Summary ---")
@@ -136,7 +285,7 @@ async def _cmd_read(args: argparse.Namespace) -> None:
 
     print(f"Connecting to {args.address} to read '{field_name}' ...")
 
-    async with SpecializedConnection(args.address, pin=args.pin) as conn:
+    async with _connection(args) as conn:
         if tcx_param_id is not None:
             msg = await conn.request_tcx_value(tcx_param_id)
         else:
@@ -224,7 +373,7 @@ async def _cmd_write(args: argparse.Namespace) -> None:
 
     print(f"Connecting to {args.address} to write '{field_name}' = {raw_value} ...")
 
-    async with SpecializedConnection(args.address, pin=args.pin) as conn:
+    async with _connection(args) as conn:
         await conn.write_command(command)
         print(
             f"Wrote {field_name} = {raw_value} (raw: {wire_value}, bytes: {command.hex()})"
@@ -284,11 +433,7 @@ async def _cmd_capture(args: argparse.Namespace) -> None:
         pass
 
     print("seconds\tdirection\tservice\tcharacteristic\tpayload", flush=True)
-    async with SpecializedConnection(
-        args.address,
-        pin=args.pin,
-        trace_callback=trace,
-    ) as conn:
+    async with _connection(args, trace_callback=trace) as conn:
         await conn.subscribe_notifications(discard)
         try:
             if args.duration > 0:
@@ -319,10 +464,45 @@ def main(argv: list[str] | None = None) -> None:
         "-t", "--timeout", type=float, default=10.0, help="Scan duration (seconds)"
     )
 
+    # --- fetch-key ---
+    p_fetch_key = sub.add_parser(
+        "fetch-key",
+        help="Retrieve a wrapped key for an encrypted bike",
+        description=(
+            "Retrieve the 64-character wrapped bike key. "
+            "Requires specialized-turbo[cloud]."
+        ),
+    )
+    p_fetch_key.add_argument(
+        "address",
+        nargs="?",
+        help="BLE address; optional when both HMI identifiers are provided",
+    )
+    p_fetch_key.add_argument(
+        "--email",
+        required=True,
+        help="Specialized account email; password is prompted securely",
+    )
+    p_fetch_key.add_argument("--hmi-hardware", help="HMI hardware version override")
+    p_fetch_key.add_argument("--hmi-serial", help="HMI serial number override")
+    p_fetch_key.add_argument(
+        "--scan-timeout",
+        type=float,
+        default=10.0,
+        help="BLE scan timeout in seconds",
+    )
+    p_fetch_key.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Print address, HMI identifiers, and wrapped key as JSON",
+    )
+
     # --- telemetry ---
     p_tel = sub.add_parser("telemetry", help="Stream live telemetry")
     p_tel.add_argument("address", help="BLE MAC address (e.g. DC:DD:BB:4A:D6:55)")
     p_tel.add_argument("-p", "--pin", type=str, default=None, help="Pairing PIN")
+    _add_key_arguments(p_tel)
     p_tel.add_argument(
         "-d",
         "--duration",
@@ -339,6 +519,7 @@ def main(argv: list[str] | None = None) -> None:
     p_read.add_argument("field", help="Field name or 'list'")
     p_read.add_argument("address", nargs="?", default=None, help="BLE MAC address")
     p_read.add_argument("-p", "--pin", type=str, default=None, help="Pairing PIN")
+    _add_key_arguments(p_read)
     p_read.add_argument("-f", "--format", choices=["table", "json"], default="table")
 
     # --- services ---
@@ -353,6 +534,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     p_capture.add_argument("address", help="BLE MAC address")
     p_capture.add_argument("-p", "--pin", type=str, default=None, help="Pairing PIN")
+    _add_key_arguments(p_capture)
     p_capture.add_argument(
         "-d",
         "--duration",
@@ -370,12 +552,14 @@ def main(argv: list[str] | None = None) -> None:
     p_write.add_argument("value", nargs="?", default=None, help="Value to write")
     p_write.add_argument("address", nargs="?", default=None, help="BLE MAC address")
     p_write.add_argument("-p", "--pin", type=str, default=None, help="Pairing PIN")
+    _add_key_arguments(p_write)
 
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
 
     coro = {
         "scan": _cmd_scan,
+        "fetch-key": _cmd_fetch_key,
         "telemetry": _cmd_telemetry,
         "read": _cmd_read,
         "services": _cmd_services,
@@ -385,6 +569,9 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         asyncio.run(coro)
+    except CLICommandError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
     except KeyboardInterrupt:
         print("\nInterrupted.")
 

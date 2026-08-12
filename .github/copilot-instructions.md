@@ -10,7 +10,9 @@ Python library for reading and writing telemetry from Specialized Turbo e-bikes 
 protocol.py     Stateless protocol layer: UUIDs, enums, field definitions, parse_message()
 parameters.py   BikeParameter enum (352 IDs) and TCX field definitions for TCX2+ protocol
 framing.py      CRC-16/CCITT-FALSE framing for TCX2+ 20-byte packets
-encryption.py   AES-128-CTR encryption/decryption and key derivation for TCX2+
+encryption.py   AES-128-CTR packet crypto and cloud wrapped-key unwrapping
+key_provider.py Pluggable async wrapped-key providers and typed key errors
+cloud.py        Optional httpx account/application-ID/keystore client
 session.py      ProtocolSession ABC with TCU1Session (passthrough) and TCXSession (CRC + encryption)
 models.py       Mutable dataclass state containers (BatteryState, MotorState, BikeSettings, TelemetrySnapshot)
 transport.py    TCX write-without-response + notification correlation and raw packet tracing
@@ -21,7 +23,8 @@ cli.py          CLI: scan, telemetry, read, write, services, capture
 
 Data flow: BLE bytes -> `session.unpack()` -> `parse_message()` -> `ParsedMessage` -> `TelemetrySnapshot.update_from_message()` -> sub-model `update()`.
 
-TCU1 uses `[sender][channel][data]` messages. TCX2+ uses `[param_id_be][data][zero-pad] + [CRC-16 LE]` = 20 bytes, optionally AES-128-CTR encrypted.
+TCU1 uses `[sender][channel][data]` messages. TCX2+ uses `[param_id_be][16-byte data/pad][CRC-16 LE]` = 20 bytes. When
+encrypted, only the 16-byte middle block is transformed; ID and CRC stay clear.
 
 ## Protocol generations
 
