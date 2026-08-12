@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from .framing import FRAMED_PACKET_SIZE, NAK_BYTE

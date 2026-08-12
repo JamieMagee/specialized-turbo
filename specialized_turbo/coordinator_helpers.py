@@ -187,7 +187,7 @@ async def identify_tcx(
                     transport.session = TCXSession(key=bike_key, iv=iv)
     except EncryptionKeyRequiredError:
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         if encryption_required:
             raise EncryptionKeyRequiredError(
                 "Encrypted TCX identification failed"

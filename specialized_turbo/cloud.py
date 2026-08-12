@@ -5,6 +5,7 @@ from __future__ import annotations
 import platform
 import time
 from dataclasses import dataclass
+from typing import Self
 
 import httpx
 
@@ -57,7 +58,7 @@ class SpecializedCloudClient:
         self._email = email
         self._application_id = application_id
 
-    async def __aenter__(self) -> SpecializedCloudClient:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *exc: object) -> None:

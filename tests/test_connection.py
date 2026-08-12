@@ -17,9 +17,9 @@ from specialized_turbo.encryption import PRODUCTION_WRAPPING_KEY
 from specialized_turbo.framing import is_nak_packet, pack_tcx, unpack_tcx
 from specialized_turbo.key_provider import EncryptionKeyRequiredError
 from specialized_turbo.protocol import (
+    BikeAdvertisement,
     BLEProfile,
     BLEServiceID,
-    BikeAdvertisement,
     ProtocolEncryptionMethod,
     get_service_characteristics,
 )
@@ -116,7 +116,6 @@ def fake_bleak(monkeypatch: pytest.MonkeyPatch) -> type[_FakeBleakClient]:
         timeout: float = 10.0,
     ) -> None:
         del timeout
-        return None
 
     monkeypatch.setattr(connection_module, "BleakClient", _FakeBleakClient)
     monkeypatch.setattr(

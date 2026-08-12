@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import specialized_turbo.cli as cli
 import specialized_turbo.cloud as cloud_module
+from specialized_turbo import cli
 from specialized_turbo.cloud import CloudAuthenticationError, CloudRequestError
 from specialized_turbo.protocol import (
-    BLEProfile,
     BikeAdvertisement,
+    BLEProfile,
     ProtocolEncryptionMethod,
 )
 
@@ -31,7 +32,7 @@ class _FakeCloud:
         self.login_args: tuple[str, str] | None = None
         self.key_args: tuple[str, str] | None = None
 
-    async def __aenter__(self) -> _FakeCloud:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *exc: object) -> None:

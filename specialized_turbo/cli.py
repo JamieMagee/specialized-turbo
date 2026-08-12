@@ -79,15 +79,17 @@ async def _connection(
     *,
     trace_callback: TraceCallback | None = None,
 ) -> AsyncIterator[SpecializedConnection]:
-    async with _key_provider(args) as provider:
-        async with SpecializedConnection(
+    async with (
+        _key_provider(args) as provider,
+        SpecializedConnection(
             args.address,
             pin=args.pin,
             key_provider=provider,
             wrapped_key=getattr(args, "wrapped_key", None),
             trace_callback=trace_callback,
-        ) as connection:
-            yield connection
+        ) as connection,
+    ):
+        yield connection
 
 
 def _add_key_arguments(parser: argparse.ArgumentParser) -> None:

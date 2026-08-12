@@ -23,8 +23,8 @@ from .key_provider import (
     resolve_bike_key,
 )
 from .protocol import (
-    BLEProfile,
     BikeAdvertisement,
+    BLEProfile,
     ParsedMessage,
     ProtocolEncryptionMethod,
     build_request,
@@ -68,13 +68,9 @@ async def scan_for_bikes(
             adv.manufacturer_data,
             local_name=adv.local_name or device.name,
             service_uuids=adv.service_uuids,
-        ):
-            # Avoid duplicates
-            if not any(d.address == device.address for d, _ in found):
-                logger.info(
-                    "Found Specialized bike: %s (%s)", device.name, device.address
-                )
-                found.append((device, adv))
+        ) and not any(d.address == device.address for d, _ in found):
+            logger.info("Found Specialized bike: %s (%s)", device.name, device.address)
+            found.append((device, adv))
 
     scanner = BleakScanner(detection_callback=_detection_callback)
     await scanner.start()

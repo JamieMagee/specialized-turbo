@@ -14,10 +14,10 @@ only the BLE UUIDs and advertisement data differ.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import IntEnum, StrEnum
 import re
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from enum import IntEnum, StrEnum
 from typing import NamedTuple
 
 # ---------------------------------------------------------------------------
@@ -592,9 +592,11 @@ def parse_bike_advertisement(
         return BikeAdvertisement(generation=BLEProfile.TCX)
 
     for company_id, payload in manufacturer_data.items():
-        if company_id not in {NORDIC_COMPANY_ID, APPLE_COMPANY_ID}:
-            if ADVERTISING_MAGIC in payload:
-                return BikeAdvertisement(generation=BLEProfile.TCX)
+        if (
+            company_id not in {NORDIC_COMPANY_ID, APPLE_COMPANY_ID}
+            and ADVERTISING_MAGIC in payload
+        ):
+            return BikeAdvertisement(generation=BLEProfile.TCX)
 
     if SIMPLO_COMPANY_ID in manufacturer_data:
         return BikeAdvertisement(generation=BLEProfile.TCU1)
