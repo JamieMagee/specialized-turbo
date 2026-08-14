@@ -38,18 +38,18 @@ Newer encrypted bikes use a 10-byte binary payload:
 | Offset | Size | Meaning |
 | --- | ---: | --- |
 | 0 | 4 | HMI serial number, unsigned little-endian integer |
-| 4 | 1 | HMI hardware major version |
-| 5 | 1 | HMI hardware minor version |
-| 6 | 1 | HMI hardware patch version |
+| 4 | 1 | HMI hardware major character |
+| 5 | 1 | HMI hardware minor character |
+| 6 | 1 | HMI hardware patch character |
 | 7 | 1 | Reserved |
 | 8 | 1 | Bike type |
 | 9 | 1 | System state |
 
-The HMI serial is rendered as decimal and the hardware version as
-`major.minor.patch`. These values identify the wrapped key in Specialized's
-keystore API. A 10-byte Nordic payload must also be matched by Specialized
-device name or service UUID to avoid treating unrelated Nordic devices as
-bikes.
+The HMI serial is rendered as decimal. The three hardware bytes are ASCII
+characters joined with periods, for example `42 33 33` becomes `B.3.3`. These
+values identify the wrapped key in Specialized's keystore API. A 10-byte Nordic
+payload must also be matched by Specialized device name or service UUID to
+avoid treating unrelated Nordic devices as bikes.
 
 ### Apple iBeacon (company ID `0x004C`)
 

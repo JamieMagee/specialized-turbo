@@ -536,21 +536,21 @@ class TestAdvertising:
         assert is_specialized_advertisement({0x1234: payload}) is True
 
     def test_parses_modern_encrypted_advertisement(self):
-        payload = (123456789).to_bytes(4, "little") + bytes([3, 2, 1, 0, 9, 4])
+        payload = bytes.fromhex("dac8c404423333330601")
 
         advertisement = parse_bike_advertisement(
             {NORDIC_COMPANY_ID: payload},
-            local_name="SPECIALIZED",
+            local_name="WSBC001057439S",
         )
 
         assert advertisement is not None
         assert advertisement.generation == BLEProfile.TCX
         assert advertisement.encryption == ProtocolEncryptionMethod.AES_CTR
-        assert advertisement.hmi_serial == "123456789"
-        assert advertisement.hmi_hardware == "3.2.1"
-        assert advertisement.reserved == 0
-        assert advertisement.bike_type == 9
-        assert advertisement.system_state == 4
+        assert advertisement.hmi_serial == "80005338"
+        assert advertisement.hmi_hardware == "B.3.3"
+        assert advertisement.reserved == 0x33
+        assert advertisement.bike_type == 6
+        assert advertisement.system_state == 1
 
     def test_rejects_wrong_length_modern_advertisement(self):
         payload = (123456789).to_bytes(4, "little") + bytes([3, 2, 1, 0, 9])

@@ -579,7 +579,7 @@ def parse_bike_advertisement(
                 generation=BLEProfile.TCX,
                 encryption=ProtocolEncryptionMethod.AES_CTR,
                 hmi_serial=str(int.from_bytes(nordic_payload[:4], "little")),
-                hmi_hardware=".".join(str(value) for value in nordic_payload[4:7]),
+                hmi_hardware=".".join(chr(value) for value in nordic_payload[4:7]),
                 reserved=nordic_payload[7],
                 bike_type=nordic_payload[8],
                 system_state=nordic_payload[9],
