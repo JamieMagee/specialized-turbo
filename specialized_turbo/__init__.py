@@ -276,7 +276,6 @@ __all__ = [
     # Advertisement parsing / identification
     "BikeInfo",
     "parse_bike_info",
-    "ProtocolEncryptionMethod",
     "BikeEncryptionKey",
     "ProtocolRevision",
     "TCXGeneration",
