@@ -38,6 +38,7 @@ class TestNoAiohttpDependency:
         result = subprocess.run(
             [sys.executable, "-c", script],
             capture_output=True,
+            check=False,
             text=True,
             timeout=30,
         )
@@ -59,6 +60,7 @@ class TestNoAiohttpDependency:
         result = subprocess.run(
             [sys.executable, "-c", script],
             capture_output=True,
+            check=False,
             text=True,
             timeout=30,
         )

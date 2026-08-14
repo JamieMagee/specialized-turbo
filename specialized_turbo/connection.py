@@ -10,9 +10,9 @@ import asyncio
 import logging
 import warnings
 from collections.abc import Callable
-from typing import Any
+from typing import Self
 
-from bleak import BleakClient, BleakScanner
+from bleak import BleakClient, BleakError, BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
@@ -32,8 +32,10 @@ from .key_provider import (
 from .keystore.models import BikeEncryptionKey
 from .parameters import BikeParameter
 from .protocol import (
+    NORDIC_COMPANY_ID,
     BikeAdvertisement,
     BLEProfile,
+    ParsedMessage,
     ProtocolEncryptionMethod,
     build_request,
     get_char_notify,
@@ -44,7 +46,6 @@ from .protocol import (
     parse_bike_advertisement,
     parse_message,
     parse_tcx_message,
-    ParsedMessage,
 )
 from .session import ProtocolSession, TCU1Session
 from .transport import (
@@ -89,13 +90,11 @@ async def scan_for_bikes(
     found: list[tuple[BLEDevice, AdvertisementData]] = []
 
     def _detection_callback(device: BLEDevice, adv: AdvertisementData) -> None:
-        if is_specialized_advertisement(adv.manufacturer_data):
-            # Avoid duplicates
-            if not any(d.address == device.address for d, _ in found):
-                logger.info(
-                    "Found Specialized bike: %s (%s)", device.name, device.address
-                )
-                found.append((device, adv))
+        if is_specialized_advertisement(adv.manufacturer_data) and not any(
+            found_device.address == device.address for found_device, _ in found
+        ):
+            logger.info("Found Specialized bike: %s (%s)", device.name, device.address)
+            found.append((device, adv))
 
     scanner = BleakScanner(detection_callback=_detection_callback)
     await scanner.start()
@@ -324,11 +323,11 @@ class SpecializedConnection:
 
     # -- context manager --------------------------------------------------
 
-    async def __aenter__(self) -> SpecializedConnection:
+    async def __aenter__(self) -> Self:
         await self.connect()
         return self
 
-    async def __aexit__(self, *exc: Any) -> None:
+    async def __aexit__(self, *exc: object) -> None:
         await self.disconnect()
 
     # -- connection lifecycle ---------------------------------------------
@@ -352,7 +351,7 @@ class SpecializedConnection:
             try:
                 logger.debug("Triggering pairing by reading CHAR_NOTIFY ...")
                 await self._client.read_gatt_char(self._char_notify)
-            except Exception as exc:
+            except (BleakError, TimeoutError) as exc:
                 logger.debug(
                     "Initial read raised %s (expected during pairing): %s",
                     type(exc).__name__,
@@ -370,7 +369,7 @@ class SpecializedConnection:
                     "Please pair via your OS Bluetooth settings with PIN %s.",
                     self._pin,
                 )
-            except Exception as exc:
+            except (BleakError, TimeoutError) as exc:
                 logger.warning("Pairing raised %s: %s", type(exc).__name__, exc)
 
         # Create protocol session
@@ -420,6 +419,37 @@ class SpecializedConnection:
         self._char_write = get_char_write(generation)
 
     async def _prepare_tcx_context(self) -> None:
+        if self._bike_info is None and self._advertisement is not None:
+            advertisement = self._advertisement
+            if (
+                advertisement.hmi_serial is not None
+                and advertisement.hmi_hardware is not None
+            ):
+                hardware_parts = advertisement.hmi_hardware.split(".")
+                if len(hardware_parts) == 3 and all(
+                    len(part) == 1 for part in hardware_parts
+                ):
+                    payload = (
+                        int(advertisement.hmi_serial).to_bytes(4, "little")
+                        + bytes(ord(part) for part in hardware_parts)
+                        + bytes(
+                            [
+                                advertisement.reserved or 0,
+                                advertisement.bike_type or 0,
+                                advertisement.system_state or 0,
+                            ]
+                        )
+                    )
+                    name = (
+                        self._address.name
+                        if isinstance(self._address, BLEDevice)
+                        else "SPECIALIZED"
+                    )
+                    self._bike_info = parse_bike_info(
+                        name or "SPECIALIZED",
+                        {NORDIC_COMPANY_ID: payload},
+                    )
+
         if self._bike_info is None:
             address = (
                 self._address

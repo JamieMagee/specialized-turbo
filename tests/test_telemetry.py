@@ -20,7 +20,7 @@ other live path) must never fall back to the deprecated raw enum-id call.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import cast
+from typing import ClassVar, Self, cast
 
 import pytest
 from bleak.backends.characteristic import BleakGATTCharacteristic
@@ -358,7 +358,7 @@ class TestTcu1Unchanged:
 class _RecordingConnection:
     """Fake SpecializedConnection that records its constructor kwargs."""
 
-    captured: dict[str, object] = {}
+    captured: ClassVar[dict[str, object]] = {}
 
     def __init__(
         self,
@@ -388,7 +388,7 @@ class _RecordingConnection:
     def session(self) -> ProtocolSession:
         return self._session
 
-    async def __aenter__(self) -> _RecordingConnection:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *exc: object) -> None:

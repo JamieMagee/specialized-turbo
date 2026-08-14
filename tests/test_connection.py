@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 from bleak.backends.characteristic import BleakGATTCharacteristic
@@ -42,9 +43,10 @@ from specialized_turbo.key_provider import EncryptionKeyRequiredError
 from specialized_turbo.keystore.models import BikeEncryptionKey
 from specialized_turbo.parameters import BikeParameter, encode_parameter_id
 from specialized_turbo.protocol import (
+    NORDIC_COMPANY_ID,
+    BikeAdvertisement,
     BLEProfile,
     BLEServiceID,
-    NORDIC_COMPANY_ID,
     ProtocolEncryptionMethod,
     get_service_characteristics,
 )
@@ -426,6 +428,37 @@ async def test_manual_wrapped_key_is_resolved_before_connection() -> None:
     assert connection._key == BikeEncryptionKey(raw=KEY_RAW)
 
 
+async def test_decoded_advertisement_builds_bike_info_without_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scan = AsyncMock()
+    monkeypatch.setattr(
+        connection_module,
+        "find_advertisement_by_address",
+        scan,
+    )
+    connection = SpecializedConnection(
+        "AA:BB:CC:DD:EE:FF",
+        advertisement=BikeAdvertisement(
+            generation=BLEProfile.TCX,
+            encryption=ProtocolEncryptionMethod.AES_CTR,
+            hmi_serial="80005338",
+            hmi_hardware="B.3.3",
+            reserved=0x33,
+            bike_type=6,
+            system_state=1,
+        ),
+        wrapped_key=_wrapped_key(),
+    )
+
+    await connection._prepare_tcx_context()
+
+    scan.assert_not_awaited()
+    assert connection._bike_info is not None
+    assert connection._bike_info.tcx_generation is TCXGeneration.TCX2
+    assert connection._key == BikeEncryptionKey(raw=KEY_RAW)
+
+
 async def test_scan_builds_bike_info_for_key_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -515,7 +548,7 @@ async def test_missing_key_raises_cleanly_and_is_retryable(
     assert not connection.is_connected
 
     # Retry with a valid key on the *same* connection object succeeds.
-    connection._key = BikeEncryptionKey(raw=KEY_RAW)  # noqa: SLF001
+    connection._key = BikeEncryptionKey(raw=KEY_RAW)
     await connection.connect()
     assert connection.is_connected
     assert connection.protocol_revision == ProtocolRevision(GENERATION, REVISION)

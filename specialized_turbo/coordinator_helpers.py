@@ -24,10 +24,10 @@ from .models import TelemetrySnapshot
 from .parameters import BikeParameter, get_tcx_field
 from .protocol import (
     TCU1_POLL_FIELDS,
+    ParsedMessage,
     build_request,
     parse_message,
     parse_tcx_message,
-    ParsedMessage,
 )
 from .session import ProtocolSession, TCXSession
 from .transport import TCXNotificationTransport, TCXTransportDisconnectedError
@@ -196,7 +196,7 @@ async def poll_tcu1(
             if msg.sender == sender and msg.channel == channel:
                 snapshot.update_from_message(msg)
                 updated = True
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug(
                 "Failed to poll TCU1 field (%02x, %02x)",
                 sender,
@@ -242,7 +242,7 @@ async def poll_tcx(
             payload = await transport.request_wire_parameter(wire_id)
         except TCXTransportDisconnectedError:
             raise
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug(
                 "Failed to poll TCX %s (wire 0x%04x)",
                 param.name,
@@ -252,7 +252,7 @@ async def poll_tcx(
             continue
         try:
             msg = parse_tcx_wire_payload(payload, revision)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug(
                 "Failed to parse TCX %s (wire 0x%04x) response: %s",
                 param.name,
@@ -271,7 +271,7 @@ async def poll_tcx(
             continue
         try:
             snapshot.update_from_message(msg)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug(
                 "Failed to update snapshot from TCX %s (wire 0x%04x)",
                 param.name,
@@ -334,7 +334,7 @@ async def identify_tcx(
                 )
     except TCXTransportDisconnectedError:
         raise
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning(
             "TCX identification handshake failed, using unencrypted session",
             exc_info=True,

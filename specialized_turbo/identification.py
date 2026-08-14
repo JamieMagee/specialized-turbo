@@ -53,12 +53,14 @@ from .wire_profiles import (
     ProtocolRevision,
     TCXGeneration,
     UnmappedParameterError,
-    UnsupportedRevisionError as _WireUnsupportedRevisionError,
     WireDatatype,
     bike_parameter_for_wire_id,
     get_wire_datatype,
     identification_wire_id_for,
     wire_id_for,
+)
+from .wire_profiles import (
+    UnsupportedRevisionError as _WireUnsupportedRevisionError,
 )
 
 logger = logging.getLogger(__name__)

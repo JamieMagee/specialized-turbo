@@ -13,7 +13,7 @@ over BLE. Supplying valid key material remains the caller's responsibility.
 
 from __future__ import annotations
 
-from ..encryption import derive_key
+from ..encryption import EncryptionError, derive_key
 from .exceptions import InvalidEncryptionKeyError
 
 _WRAPPED_KEY_LENGTH = 64
@@ -71,7 +71,7 @@ class BikeEncryptionKey:
             )
         try:
             return derive_key(wrapped_base64)
-        except Exception as exc:
+        except EncryptionError as exc:
             # Deliberately drop the original exception (and its message,
             # which may echo back fragments of the invalid input) --
             # only the exception type is safe to surface.

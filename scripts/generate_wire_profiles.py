@@ -34,7 +34,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from specialized_turbo.parameters import BikeParameter  # noqa: E402
+from specialized_turbo.parameters import BikeParameter
 
 _REVISION_RE = re.compile(r"^ProtocolRx([0-9A-F]{2})(TCX[234])$")
 

@@ -12,7 +12,6 @@ HCI traces, including ``SYSTEM_GET_NEW_VI=0x0A00``.
 
 from __future__ import annotations
 
-
 KNOWN_REVISIONS: dict[int, tuple[int, ...]] = {
     2: (
         0x12,

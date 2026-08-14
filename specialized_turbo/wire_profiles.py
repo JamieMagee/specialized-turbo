@@ -32,9 +32,9 @@ see that module's docstring for full provenance.
 
 from __future__ import annotations
 
-from enum import IntEnum, StrEnum
 from dataclasses import dataclass
-from functools import lru_cache
+from enum import IntEnum, StrEnum
+from functools import cache
 
 from . import _wire_map_data as _data
 from .parameters import BikeParameter
@@ -188,7 +188,7 @@ def wire_id_for(
     )
 
 
-@lru_cache(maxsize=None)
+@cache
 def _reverse_generation_only(generation: int) -> dict[int, int]:
     return {
         gens[generation]: value
@@ -197,7 +197,7 @@ def _reverse_generation_only(generation: int) -> dict[int, int]:
     }
 
 
-@lru_cache(maxsize=None)
+@cache
 def _reverse_for_revision(generation: int, revision: int) -> dict[int, int]:
     table = dict(_reverse_generation_only(generation))
     for value, overrides in _data.REVISION_OVERRIDES.items():
@@ -256,7 +256,7 @@ def identification_wire_id_for(
     return entry[protocol.value]
 
 
-@lru_cache(maxsize=None)
+@cache
 def _reverse_identification(protocol: str) -> dict[int, int]:
     return {
         entry[protocol]: value

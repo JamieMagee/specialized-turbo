@@ -17,12 +17,14 @@ from __future__ import annotations
 
 from .exceptions import (
     InvalidEncryptionKeyError as InvalidEncryptionKeyError,
+)
+from .exceptions import (
     KeystoreError as KeystoreError,
 )
 from .models import BikeEncryptionKey as BikeEncryptionKey
 
 __all__ = [
     "BikeEncryptionKey",
-    "KeystoreError",
     "InvalidEncryptionKeyError",
+    "KeystoreError",
 ]
