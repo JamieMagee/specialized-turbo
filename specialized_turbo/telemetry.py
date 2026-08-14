@@ -11,19 +11,45 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
+from typing import Protocol, runtime_checkable
 
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
+from .bike_info import BikeInfo
 from .connection import SpecializedConnection
-from .coordinator_helpers import TCX_POLL_PARAMS
+from .coordinator_helpers import TCX_POLL_PARAMS, parse_tcx_wire_payload
 from .framing import is_realtime_packet
 from .key_provider import EncryptionKeyProvider
+from .keystore.models import BikeEncryptionKey
 from .models import TelemetrySnapshot
-from .protocol import ParsedMessage, parse_message, parse_tcx_message
+from .protocol import BLEProfile, ParsedMessage, parse_message, parse_tcx_message
 from .session import TCXSession
 from .transport import TCXRequestTimeoutError
+from .wire_profiles import ProtocolRevision, UnmappedParameterError
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class RevisionAwareConnection(Protocol):
+    """Narrow interface a connection exposes to advertise its negotiated
+    TCX protocol revision.
+
+    :class:`TelemetryMonitor` only needs this one read-only property to
+    switch from the legacy enum-ID-assumption parse (:func:`~specialized_turbo
+    .protocol.parse_tcx_message`) to profile-aware (:class:`ProtocolRevision`
+    -> wire id) parsing of TCX notifications. Depending on this narrow
+    structural protocol -- rather than importing a concrete connection
+    type's identification internals -- keeps the telemetry layer decoupled
+    from the connection layer. :class:`SpecializedConnection` satisfies it
+    via its :attr:`~specialized_turbo.connection.SpecializedConnection.active_revision`
+    property. A connection that doesn't implement it (or returns ``None``)
+    is treated as "revision unknown" and notification parsing falls back to
+    the legacy path; see :meth:`TelemetryMonitor._active_revision`.
+    """
+
+    @property
+    def active_revision(self) -> ProtocolRevision | None: ...
 
 
 class TelemetryMonitor:
@@ -48,13 +74,20 @@ class TelemetryMonitor:
             await monitor.stop()
     """
 
-    def __init__(self, connection: SpecializedConnection) -> None:
+    def __init__(
+        self,
+        connection: SpecializedConnection,
+        *,
+        revision_accessor: Callable[[], ProtocolRevision | None] | None = None,
+    ) -> None:
         self._conn = connection
+        self._revision_accessor = revision_accessor
         self._snapshot = TelemetrySnapshot()
         self._running = False
         self._queue: asyncio.Queue[ParsedMessage | None] = asyncio.Queue()
         self._nak_count = 0
         self._reported_realtime_bundle = False
+        self._reported_parse_mode = False
         self.on_update: Callable[[ParsedMessage, TelemetrySnapshot], None] | None = None
         """Optional callback invoked after each notification is processed."""
 
@@ -71,6 +104,36 @@ class TelemetryMonitor:
     def nak_count(self) -> int:
         """Number of NAK (rejected) responses received since start."""
         return self._nak_count
+
+    def _active_revision(self) -> ProtocolRevision | None:
+        """Best-effort, type-validated lookup of the connection's negotiated revision.
+
+        Prefers an injected ``revision_accessor`` (useful for tests, or for
+        callers that don't want their connection type to implement
+        :class:`RevisionAwareConnection` in full); otherwise reads
+        ``connection.active_revision`` via ``getattr`` rather than an
+        ``isinstance`` check, so this keeps working whether or not the
+        connection type structurally satisfies the protocol.
+
+        The result is validated: anything other than a
+        :class:`ProtocolRevision` (or ``None``) is rejected with a warning
+        and treated as "revision unknown", so a mistyped accessor or
+        connection attribute can never smuggle a bogus object into the
+        profile-aware wire-id resolution. ``None`` means notification parsing
+        falls back to the legacy, non-profile-aware path.
+        """
+        if self._revision_accessor is not None:
+            revision = self._revision_accessor()
+        else:
+            revision = getattr(self._conn, "active_revision", None)
+        if revision is None or isinstance(revision, ProtocolRevision):
+            return revision
+        logger.warning(
+            "Ignoring active_revision of unexpected type %s (expected "
+            "ProtocolRevision or None); falling back to legacy parsing",
+            type(revision).__name__,
+        )
+        return None
 
     async def start(self) -> None:
         """Subscribe to bike notifications and begin decoding."""
@@ -118,6 +181,9 @@ class TelemetryMonitor:
             unpacked = session.unpack(data)
             if isinstance(session, TCXSession):
                 if is_realtime_packet(unpacked):
+                    # f8f4 real-time bundles aren't decoded yet -- keep
+                    # suppressing them explicitly rather than misparsing
+                    # their payload as a single field.
                     if not self._reported_realtime_bundle:
                         logger.info(
                             "Receiving bundled TCX real-time data; "
@@ -125,7 +191,26 @@ class TelemetryMonitor:
                         )
                         self._reported_realtime_bundle = True
                     return
-                msg = parse_tcx_message(unpacked)
+                revision = self._active_revision()
+                if revision is not None:
+                    if not self._reported_parse_mode:
+                        logger.info(
+                            "Active TCX revision %s 0x%02x known; "
+                            "parsing notifications profile-aware",
+                            revision.generation.name,
+                            revision.revision,
+                        )
+                        self._reported_parse_mode = True
+                    msg = parse_tcx_wire_payload(unpacked, revision)
+                else:
+                    if not self._reported_parse_mode:
+                        logger.info(
+                            "No active TCX revision available from the "
+                            "connection; parsing notifications with the "
+                            "legacy enum-ID assumption"
+                        )
+                        self._reported_parse_mode = True
+                    msg = parse_tcx_message(unpacked)
             else:
                 msg = parse_message(unpacked)
         except Exception:
@@ -166,14 +251,52 @@ class TelemetryMonitor:
         self._queue.put_nowait(msg)
 
     async def _prime_tcx_snapshot(self) -> None:
-        """Query the initial TCX values through the notification transport."""
+        """Query the initial TCX values through the notification transport.
+
+        Profile-aware: each :data:`TCX_POLL_PARAMS` entry is requested via
+        :meth:`SpecializedConnection.request_tcx_parameter`, which resolves
+        the app-level ``BikeParameter`` to a wire command id through the
+        negotiated :class:`ProtocolRevision` -- the same revision the live
+        ``_notification_handler`` uses to decode responses. The request and
+        notification sides therefore switch together: when a revision is
+        available both are profile-aware; when it is not, priming is skipped
+        entirely (the deprecated raw enum-ID path is never used) and the
+        snapshot is populated by live notifications alone.
+
+        Per-parameter failures are contained: a parameter with no wire id
+        for this revision is skipped; a request timeout stops priming
+        (matching the previous behaviour) without aborting ``start()``.
+        """
+        revision = self._active_revision()
+        if revision is None:
+            logger.info(
+                "No active TCX protocol revision available; skipping initial "
+                "snapshot priming (cannot address parameters by wire id "
+                "without a negotiated revision). Live notifications will "
+                "populate the snapshot as they arrive."
+            )
+            return
+        logger.info(
+            "Priming TCX snapshot profile-aware (BikeParameter -> wire id) "
+            "for %s revision 0x%02x",
+            revision.generation.name,
+            revision.revision,
+        )
         for param in TCX_POLL_PARAMS:
             try:
-                await self._conn.request_tcx_value(int(param))
+                await self._conn.request_tcx_parameter(param)
+            except UnmappedParameterError:
+                logger.debug(
+                    "No wire id for %s on %s revision 0x%02x; skipping prime",
+                    param.name,
+                    revision.generation.name,
+                    revision.revision,
+                )
+                continue
             except TCXRequestTimeoutError:
                 logger.warning(
-                    "Timed out while priming TCX telemetry at parameter %d",
-                    int(param),
+                    "Timed out while priming TCX telemetry at parameter %s",
+                    param.name,
                 )
                 break
 
@@ -182,6 +305,9 @@ async def run_telemetry_session(
     address: str,
     *,
     pin: str | None = None,
+    generation: BLEProfile = BLEProfile.TCX,
+    bike_info: BikeInfo | None = None,
+    key: BikeEncryptionKey | None = None,
     duration: float = 0,
     output_format: str = "table",
     output_callback: Callable[[str], None] | None = None,
@@ -192,12 +318,31 @@ async def run_telemetry_session(
     Connect, print telemetry for a while, and return the final snapshot.
 
     Set duration=0 to run until Ctrl+C. output_format is "table" or "json".
+
+    *generation*, *bike_info*, and *key* are forwarded to
+    :class:`SpecializedConnection`. A TCX2+ bike needs the parsed
+    advertisement (*bike_info*) and its AES key (*key*) so the identification
+    handshake can run; a TCU1 bike needs neither -- pass
+    ``generation=BLEProfile.TCU1``. Example::
+
+        # TCX2+ (identified) session
+        await run_telemetry_session(
+            "DC:DD:BB:4A:D6:55", pin="946166", bike_info=info, key=key
+        )
+
+        # TCU1 session
+        await run_telemetry_session(
+            "DC:DD:BB:4A:D6:55", pin="946166", generation=BLEProfile.TCU1
+        )
     """
     printer = output_callback or print
 
     async with SpecializedConnection(
         address,
         pin=pin,
+        generation=generation,
+        bike_info=bike_info,
+        key=key,
         key_provider=key_provider,
         wrapped_key=wrapped_key,
     ) as conn:

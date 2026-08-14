@@ -40,8 +40,9 @@ not GATT reads.
 
 ### 1. BikeParameter Enum
 
-**Method**: Extracted all `(name, wire_id)` pairs from both the decompiled
-`BikeParameter.java` (jadx) and `parameters.py` (Python IntEnum).
+**Method**: Compared app-level parameter names and values from the decompiled
+`BikeParameter.java` with `parameters.py`, then extracted the separate wire
+command maps from the native protocol constructors.
 
 **Current results**: 351 entries in the v1.70.1 Java enum plus two native-only
 identification IDs in Python:
@@ -308,23 +309,19 @@ That bug has been fixed.
 
 ### Identification Handshake — Decompiled ✅
 
-**initShortSteps** pushes parameter IDs to the identification sequence:
-1. `301` (SYSTEM_GET_NEW_VI)
-2. `364` (SYSTEM_STATE)
-3. If TCX3 or TCX4: adds parameter `14` (BATTERY1_FIRMWARE metadata)
+The app-level `BikeParameter` value is not the TCX wire command. The current
+library maps by parameter name to the native generation/revision profile:
 
-This confirms the Python library's 3-step short handshake:
-```python
-steps = [
-    BikeParameter.SYSTEM_GET_NEW_VI,  # 301
-    BikeParameter.SYSTEM_STATE,  # 364
-    BikeParameter.BATTERY1_FIRMWARE,  # 14
-]
-```
+1. `SYSTEM_GET_NEW_VI` (app 301) uses clear wire command `0x0A00`.
+2. `SYSTEM_HMI_PROTOCOL_VERSION` (app 311) uses clear wire command `0x0A01`.
+3. `SYSTEM_STATE` (app 364) uses encrypted wire command `0x0801`.
+4. `BATTERY1_FIRMWARE` (app 14) uses encrypted wire command `0x05F3`.
+5. `SYSTEM_HMI_HW_VERSION` (app 309) uses encrypted wire command `0x0807`.
+6. `SYSTEM_MOTOR_TYPE` (app 330) uses a revision-specific encrypted command.
+7. `SYSTEM_EBIKE_SERIAL_NUMBER` (app 291) uses encrypted wire command `0x0804`.
 
-The cloud-derived key is installed before identification. The
-`SYSTEM_GET_NEW_VI` response supplies the 16-byte packet IV; parameter 14 does
-not carry key material.
+The cloud-derived key is installed with the 16-byte IV returned by step 1.
+Parameter 14 contains firmware metadata, not key material.
 
 ### Field Decoders — Decompiled ✅
 
@@ -372,10 +369,10 @@ This confirms AES-128-CTR.
 - **Automated comparison**: Python scripts for BikeParameter enum diffing
 - **Source**: `Specialized_1.66.0_APKPure.xapk`
 - **Key files examined**:
-  - `com.specialized.turboconnect.model.BikeParameter` (352 param IDs)
+  - `com.specialized.turboconnect.model.BikeParameter` (app-level IDs)
   - `com.specialized.turboconnect.bluetooth.*` (BLE stack)
   - `com.specialized.turboconnect.jni.*` (JNI bridge to native)
-  - `com.specialized.turboconnect.model.BTEncryptionInfo` (key exchange)
+  - `com.specialized.turboconnect.model.BTEncryptionInfo` (keystore metadata)
   - `com.specialized.turboconnect.model.BikeType` (generation mapping)
   - `com.specialized.turboconnect.model.ProtocolEncryptionMethod` (AES-CTR)
   - `TurboConnectCore::CRC16Calculator` (native CRC implementation)

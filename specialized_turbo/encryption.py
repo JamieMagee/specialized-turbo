@@ -7,6 +7,11 @@ CRC-framed packets use this wire layout::
 The per-bike AES key is returned by Specialized's keystore service as a
 64-character wrapped value. The bike provides a fresh packet IV through
 ``SYSTEM_GET_NEW_VI`` during identification.
+
+Not all packets are encrypted: any packet whose first byte is the control
+byte ``0x0A`` is sent in the clear. This covers the legacy one-byte NAK and
+the ``0x0Axx`` identification control frames. F8 FF-prefixed NAK envelopes
+also remain clear.
 """
 
 from __future__ import annotations
@@ -35,10 +40,25 @@ class WrappedKeyError(EncryptionError):
 
 
 def is_encryptable(data: bytes | bytearray) -> bool:
-    """Return ``True`` if *data* should be encrypted/decrypted."""
+    """Return ``True`` if *data* should be encrypted/decrypted.
+
+    Mirrors the native ``ProtocolSession::isEncryptablePacket``, which
+    returns ``*begin != 0x0A``: every packet whose first byte is the control
+    byte ``0x0A`` is transmitted in the clear.  That single rule covers both
+    the legacy one-byte ``0x0A`` NAK *and* the ``0x0Axx`` identification
+    control frames -- ``SYSTEM_GET_NEW_VI`` (wire ``0x0A00``) and
+    ``SYSTEM_HMI_PROTOCOL_VERSION`` (wire ``0x0A01``).  Their 2-byte wire id
+    is sent big-endian, so ``data[0] == 0x0A``, and they must never be
+    encrypted (the IV is exchanged in the clear ``0x0A00`` body).  No other
+    wire id uses ``0x0A`` as its high byte, so no real telemetry parameter is
+    affected.
+
+    As a conservative superset of the native check, the TCX2+ NAK envelope
+    (``f8 ff`` prefix) is also treated as clear.
+    """
     if len(data) == 0:
         return False
-    if len(data) == 1 and data[0] == NAK_BYTE:
+    if data[0] == NAK_BYTE:
         return False
     return len(data) < 2 or data[:2] != _CLEAR_PREFIX
 

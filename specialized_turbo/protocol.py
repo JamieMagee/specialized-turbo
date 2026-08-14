@@ -684,8 +684,16 @@ def parse_tcx_message(data: bytes | bytearray) -> ParsedMessage:
     versions of this library stripped the ``f8 ff`` prefix and parsed the
     rejection code as if it were valid data, producing bogus telemetry.
 
-    The parameter ID is a 16-bit big-endian value that maps to a
-    :class:`~parameters.BikeParameter`.
+    .. note::
+       **Legacy parser.** This treats the 2-byte header directly as a
+       :class:`~parameters.BikeParameter` value, which is only correct when a
+       parameter's wire id happens to equal its ``BikeParameter`` id.  On real
+       generation/revision-aware bikes the two id spaces differ; use the
+       profile-aware :func:`specialized_turbo.identification.parse_wire_message`
+       (which reverse-maps the wire id via
+       :mod:`specialized_turbo.wire_profiles`) instead.  This function is kept
+       for the existing telemetry paths that still address parameters by their
+       enum id.
     """
     from .framing import is_nak_packet, parse_nak_packet
     from .parameters import decode_parameter_id, get_tcx_field

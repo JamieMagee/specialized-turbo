@@ -13,15 +13,15 @@ from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
 from .framing import is_nak_packet, parse_nak_packet
-from .parameters import decode_parameter_id
+from .parameters import BikeParameter, decode_parameter_id, encode_parameter_id
 from .protocol import (
     BLEProfile,
     BLEServiceID,
-    build_tcx_request,
     build_tcx_write,
     get_service_characteristics,
 )
 from .session import TCXSession
+from .wire_profiles import ProtocolRevision, wire_id_for
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,13 @@ TraceCallback = Callable[[BLETraceEvent], None]
 
 
 class TCXRequestTimeoutError(TimeoutError):
-    """Raised when a TCX request has no matching notification response."""
+    """Raised when a TCX request has no matching notification response.
+
+    ``param_id`` is the 16-bit **wire command id** that was written and never
+    answered (a NAK would have echoed it).  It is not necessarily a
+    :class:`~specialized_turbo.parameters.BikeParameter` value -- on a real
+    bike the two spaces differ (see :mod:`specialized_turbo.wire_profiles`).
+    """
 
     def __init__(self, param_id: int, timeout: float) -> None:
         super().__init__(
@@ -57,9 +63,33 @@ class TCXRequestTimeoutError(TimeoutError):
         self.timeout = timeout
 
 
+class TCXTransportDisconnectedError(ConnectionError):
+    """Raised when the BLE link closes during a TCX transaction."""
+
+
+class TCXProtocolNotNegotiatedError(RuntimeError):
+    """Raised when a ``BikeParameter`` is addressed before identification.
+
+    Resolving a :class:`~specialized_turbo.parameters.BikeParameter` to a
+    wire command id requires the :class:`~specialized_turbo.wire_profiles.
+    ProtocolRevision` negotiated during identification (see
+    :class:`~specialized_turbo.identification.TCXIdentification`).  This is
+    raised instead of guessing or silently reusing the ``BikeParameter``
+    value as if it were a wire id.
+    """
+
+    def __init__(self, param: BikeParameter) -> None:
+        super().__init__(
+            f"Cannot resolve {param.name} to a wire id: no TCX protocol "
+            "revision has been negotiated yet (identification must "
+            "complete first)"
+        )
+        self.param = param
+
+
 @dataclass(slots=True)
 class _PendingRequest:
-    param_id: int
+    wire_id: int
     service_id: BLEServiceID
     future: asyncio.Future[bytes]
 
@@ -83,6 +113,8 @@ class TCXNotificationTransport:
         self._subscribed: set[BLEServiceID] = set()
         self._pending: _PendingRequest | None = None
         self._request_lock = asyncio.Lock()
+        self._disconnected = False
+        self._protocol_revision: ProtocolRevision | None = None
 
     @property
     def session(self) -> TCXSession:
@@ -92,6 +124,23 @@ class TCXNotificationTransport:
     @session.setter
     def session(self, session: TCXSession) -> None:
         self._session = session
+
+    @property
+    def protocol_revision(self) -> ProtocolRevision | None:
+        """Generation/revision negotiated by a completed identification handshake.
+
+        ``None`` until :class:`~specialized_turbo.identification.
+        TCXIdentification` has completed and the connection layer installs
+        the negotiated :class:`~specialized_turbo.wire_profiles.
+        ProtocolRevision` here. Consumers should treat this as read-only;
+        it is set once, by the connection layer, immediately after a
+        successful identification.
+        """
+        return self._protocol_revision
+
+    @protocol_revision.setter
+    def protocol_revision(self, revision: ProtocolRevision) -> None:
+        self._protocol_revision = revision
 
     def add_listener(self, callback: NotificationCallback) -> None:
         """Forward incoming notifications to *callback*."""
@@ -103,8 +152,20 @@ class TCXNotificationTransport:
         if callback in self._listeners:
             self._listeners.remove(callback)
 
+    def mark_disconnected(self) -> None:
+        """Fail any in-flight request after the BLE link closes."""
+        self._disconnected = True
+        pending = self._pending
+        if pending is not None and not pending.future.done():
+            pending.future.set_exception(
+                TCXTransportDisconnectedError(
+                    "Bike disconnected during TCX transaction"
+                )
+            )
+
     async def subscribe(self, service_id: BLEServiceID) -> None:
         """Enable notifications for one TCX service."""
+        self._raise_if_disconnected()
         if service_id in self._subscribed:
             return
 
@@ -142,41 +203,125 @@ class TCXNotificationTransport:
             await self._client.stop_notify(characteristic)
             self._subscribed.remove(service_id)
 
+    async def request_wire_parameter(
+        self,
+        wire_id: int,
+        *,
+        body: bytes | bytearray = b"",
+        timeout: float | None = None,
+    ) -> bytes:
+        """Read by wire command id, correlating the response by that wire id.
+
+        Writes ``[wire_id_be] + body`` to service 1 and awaits the matching
+        notification.  Correlation is on the 16-bit **wire id** (the clear
+        2-byte header of the response, which a NAK echoes back), not on any
+        :class:`~specialized_turbo.parameters.BikeParameter` value -- the
+        caller is responsible for mapping app-level parameters to wire ids
+        via :mod:`specialized_turbo.wire_profiles`.
+
+        *body* carries any extra request bytes (e.g. the single required zero
+        byte of the ``0x0A00`` ``GET_NEW_VI`` identification request).  The
+        returned payload is unpacked through the active session (decrypted
+        and CRC-stripped for encrypted reads, passed through for clear
+        control/NAK frames).
+        """
+        await self.subscribe_for_identification()
+        payload = encode_parameter_id(wire_id) + bytes(body)
+        return await self._request(
+            wire_id,
+            self._session.pack(payload),
+            BLEServiceID.REQUEST,
+            timeout=timeout,
+        )
+
     async def request_parameter(
         self,
         param_id: int,
         *,
         timeout: float | None = None,
     ) -> bytes:
-        """Read a parameter by writing a request and awaiting its notification."""
-        await self.subscribe_for_identification()
-        payload = build_tcx_request(param_id)
-        return await self._request(
-            param_id,
-            self._session.pack(payload),
-            BLEServiceID.REQUEST,
-            timeout=timeout,
-        )
+        """Read a parameter, treating *param_id* directly as the wire id.
+
+        .. deprecated::
+           Legacy shim retained for callers that historically pass
+           :class:`~specialized_turbo.parameters.BikeParameter` values that
+           coincide with wire ids.  New code should resolve the wire id
+           explicitly (via :mod:`specialized_turbo.wire_profiles`) and call
+           :meth:`request_wire_parameter`.
+        """
+        return await self.request_wire_parameter(param_id, timeout=timeout)
+
+    def _resolve_wire_id(self, param: BikeParameter) -> int:
+        """Resolve *param* to a wire id through the negotiated protocol revision.
+
+        Raises:
+            TCXProtocolNotNegotiatedError: identification hasn't completed
+                yet, so no :class:`~specialized_turbo.wire_profiles.
+                ProtocolRevision` is installed.
+        """
+        revision = self._protocol_revision
+        if revision is None:
+            raise TCXProtocolNotNegotiatedError(param)
+        return wire_id_for(param, revision.generation, revision.revision)
+
+    async def request_bike_parameter(
+        self,
+        param: BikeParameter,
+        *,
+        timeout: float | None = None,
+    ) -> bytes:
+        """Read a TCX2+ value by its stable app-level ``BikeParameter`` id.
+
+        Resolves *param* to a wire command id through the
+        :class:`~specialized_turbo.wire_profiles.ProtocolRevision`
+        negotiated during identification (see :attr:`protocol_revision`),
+        then correlates the response by that wire id -- this is the
+        profile-aware replacement for passing a raw wire id (or a
+        ``BikeParameter`` value that coincidentally matches one) directly
+        to :meth:`request_parameter`/:meth:`request_wire_parameter`.
+        """
+        wire_id = self._resolve_wire_id(param)
+        return await self.request_wire_parameter(wire_id, timeout=timeout)
 
     async def write_parameter(
         self,
         param_id: int,
         data: bytes | bytearray,
     ) -> None:
-        """Write a parameter on service 3 without waiting for a GATT response."""
+        """Write to a wire command id on service 3 without a GATT response.
+
+        .. deprecated::
+           Treats *param_id* directly as the wire id. New code addressing a
+           :class:`~specialized_turbo.parameters.BikeParameter` should use
+           :meth:`write_bike_parameter`, which resolves the wire id through
+           the negotiated protocol revision instead of assuming the two id
+           spaces coincide.
+        """
         payload = build_tcx_write(param_id, data)
         await self.write_frame(
             BLEServiceID.DATA,
             self._session.pack(payload),
         )
 
+    async def write_bike_parameter(
+        self,
+        param: BikeParameter,
+        data: bytes | bytearray,
+    ) -> None:
+        """Write a TCX2+ value by its stable app-level ``BikeParameter`` id.
+
+        Resolves *param* to a wire command id through the negotiated
+        :attr:`protocol_revision` before writing -- the profile-aware
+        replacement for :meth:`write_parameter`.
+        """
+        wire_id = self._resolve_wire_id(param)
+        await self.write_parameter(wire_id, data)
+
     async def set_realtime_enabled(self, enabled: bool) -> None:
         """Enable or disable the bike's real-time telemetry stream."""
-        from .parameters import BikeParameter
-
         await self.subscribe_for_realtime()
-        await self.write_parameter(
-            int(BikeParameter.SYSTEM_REAL_TIME_DATA_ENB),
+        await self.write_bike_parameter(
+            BikeParameter.SYSTEM_REAL_TIME_DATA_ENB,
             bytes([enabled]),
         )
 
@@ -186,6 +331,7 @@ class TCXNotificationTransport:
         data: bytes | bytearray,
     ) -> None:
         """Write an already-framed packet without response."""
+        self._raise_if_disconnected()
         characteristic = get_service_characteristics(BLEProfile.TCX, service_id).write
         packet = bytes(data)
         self._emit_trace("tx", service_id, characteristic, packet)
@@ -197,23 +343,25 @@ class TCXNotificationTransport:
 
     async def _request(
         self,
-        param_id: int,
+        wire_id: int,
         frame: bytes,
         service_id: BLEServiceID,
         *,
         timeout: float | None,
     ) -> bytes:
         request_timeout = self._request_timeout if timeout is None else timeout
+        self._raise_if_disconnected()
 
         async with self._request_lock:
+            self._raise_if_disconnected()
             future = asyncio.get_running_loop().create_future()
-            self._pending = _PendingRequest(param_id, service_id, future)
+            self._pending = _PendingRequest(wire_id, service_id, future)
             try:
                 await self.write_frame(service_id, frame)
                 try:
                     response = await asyncio.wait_for(future, request_timeout)
                 except TimeoutError as exc:
-                    raise TCXRequestTimeoutError(param_id, request_timeout) from exc
+                    raise TCXRequestTimeoutError(wire_id, request_timeout) from exc
                 return self._session.unpack(response)
             finally:
                 if self._pending is not None and self._pending.future is future:
@@ -236,7 +384,7 @@ class TCXNotificationTransport:
             and not pending.future.done()
         ):
             try:
-                response_param = self._response_param_id(packet)
+                response_wire_id = self._response_wire_id(packet)
             except ValueError:
                 logger.debug(
                     "Ignoring uncorrelated TCX notification on service %d: %s",
@@ -244,7 +392,7 @@ class TCXNotificationTransport:
                     packet.hex(),
                 )
             else:
-                if response_param == pending.param_id:
+                if response_wire_id == pending.wire_id:
                     pending.future.set_result(packet)
 
         for listener in tuple(self._listeners):
@@ -253,12 +401,19 @@ class TCXNotificationTransport:
             except Exception:
                 logger.warning("TCX notification listener raised", exc_info=True)
 
-    def _response_param_id(self, packet: bytes) -> int:
+    def _response_wire_id(self, packet: bytes) -> int:
+        """Wire command id a response correlates to (a NAK echoes it)."""
         payload = self._session.unpack(packet)
         if is_nak_packet(payload):
-            param_id, _reason = parse_nak_packet(payload)
-            return param_id
+            wire_id, _reason = parse_nak_packet(payload)
+            return wire_id
         return decode_parameter_id(payload)
+
+    def _raise_if_disconnected(self) -> None:
+        if self._disconnected:
+            raise TCXTransportDisconnectedError(
+                "Bike disconnected during TCX transaction"
+            )
 
     def _emit_trace(
         self,

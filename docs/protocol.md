@@ -338,58 +338,37 @@ def unwrap_key(base64_key: str, wrapping_key: bytes) -> bytes:
 ## Identification handshake
 
 Before streaming telemetry, TCX2+ bikes require a multi-step identification
-sequence. Each step CRC-frames a 2-byte big-endian `BikeParameter` ID, writes
-the 20-byte frame without response to service 1 characteristic `0x0021`, and
-awaits the matching notification on `0x0011`.
+sequence. `BikeParameter` is the app-level identifier. The library maps it to
+the generation and revision-specific 16-bit wire command before CRC framing,
+writes the 20-byte frame without response to service 1 characteristic
+`0x0021`, and awaits the matching notification on `0x0011`.
 
 ### Full identification steps (new bike)
 
-| Step | Param ID | Name | Purpose |
-| --- | --- | --- | --- |
-| 1 | 301 | `SYSTEM_GET_NEW_VI` | Return the fresh 16-byte session IV |
-| 2 | 311 | `SYSTEM_HMI_PROTOCOL_VERSION` | Protocol version negotiation |
-| 3 | 364 | `SYSTEM_STATE` | System state (ready, sleeping, etc.) |
-| 4 | 14 | `BATTERY1_FIRMWARE` | Battery firmware metadata |
-| 5 | 309 | `SYSTEM_HMI_HW_VERSION` | HMI hardware version |
-| 6 | 330 | `SYSTEM_MOTOR_TYPE` | Motor type |
-| 7 | 291 | `SYSTEM_EBIKE_SERIAL_NUMBER` | Serial / battery info |
-
-### Short identification steps (reconnecting to known bike)
-
-| Step | Param ID | Name |
-| --- | --- | --- |
-| 1 | 301 | `SYSTEM_GET_NEW_VI` |
-| 2 | 364 | `SYSTEM_STATE` |
-| 3 | 14 | `BATTERY1_FIRMWARE` (TCX3/TCX4 metadata) |
+| Step | App param | Wire command | Name | Purpose |
+| --- | ---: | ---: | --- | --- |
+| 1 | 301 | `0x0A00` | `SYSTEM_GET_NEW_VI` | Return the fresh 16-byte session IV |
+| 2 | 311 | `0x0A01` | `SYSTEM_HMI_PROTOCOL_VERSION` | Negotiate the BLE protocol revision |
+| 3 | 364 | `0x0801` | `SYSTEM_STATE` | Read the system state |
+| 4 | 14 | `0x05F3` | `BATTERY1_FIRMWARE` | Read battery firmware metadata |
+| 5 | 309 | `0x0807` | `SYSTEM_HMI_HW_VERSION` | Read the HMI hardware version |
+| 6 | 330 | revision-specific | `SYSTEM_MOTOR_TYPE` | Read the motor type |
+| 7 | 291 | `0x0804` | `SYSTEM_EBIKE_SERIAL_NUMBER` | Read the bike serial |
 
 The first request is clear. Its 16-byte response IV is installed alongside the
-cloud-derived bike key before the remaining requests are sent.
-
-The identification result determines the bike type, which maps to a protocol generation:
-
-| Bike type | Name | Protocol generation |
-| --- | --- | --- |
-| 0 | PROTOTYPE | TCU1 (legacy) |
-| 1 | TURBO | TCU1 (legacy) |
-| 2 | LEVO1 | TCU1 (legacy) |
-| 3 | VADO | TCU1 (legacy) |
-| 4 | PLW | TCU1 (legacy) |
-| 5 | LEVO2 | TCX (2019+) |
-| 6 | COMO2 | TCX (2019+) |
-| 7 | PLW2 | TCX (2019+) |
-| 8 | APLW2 | TCX (2019+) |
-| 9 | PLUTO | TCX (2019+) |
-| 10 | APLUTO | TCX (2019+) |
-| 11 | APLUTOPLUS | TCX (2019+) |
-| 12 | PLUTO2 | TCX (2019+) |
-
-At the transport layer, the app distinguishes only two protocol modes: TCU1 (types 0–4, legacy sender/channel format) and TCX (types 5–12, parameter ID format with CRC framing). The TCX2/TCX3/TCX4 distinction refers to which parameter IDs the bike supports, not the wire format — all TCX bikes use the same 20-byte CRC-framed packets.
+cloud-derived bike key. The second control request is also clear. The remaining
+requests use the encrypted session. The HMI hardware family from the
+advertisement selects TCX2, TCX3, or TCX4; the negotiated BLE revision selects
+the exact wire profile.
 
 ---
 
 ## TCX2+ telemetry fields
 
-The TCX2+ protocol uses 16-bit parameter IDs from the `BikeParameter` enum. There are 352 known parameter IDs. The table below lists the 44 that have telemetry conversion definitions in this library.
+The app exposes stable `BikeParameter` IDs, while the bike uses separate
+16-bit wire commands selected by generation and revision. There are 353 known
+app-level parameter IDs. The table below lists those with telemetry conversion
+definitions in this library.
 
 Note that conversions differ from TCU1 in several cases. TCX battery voltage and current are 2-byte millivolt/milliamp values (`raw / 1000`), while TCU1 uses 1-byte values with different scaling (`raw / 5 + 20` for voltage, `raw / 5` for current). TCX capacity is direct watt-hours; TCU1 uses a `1.1111` multiplier.
 
@@ -464,7 +443,9 @@ These are read during the identification handshake, not during normal telemetry:
 | 315 | `SYSTEM_HMI_SW_VERSION` | `hmi_sw_version` | 4B |
 | 330 | `SYSTEM_MOTOR_TYPE` | `motor_type` | 1B |
 
-The full set of 352 `BikeParameter` IDs is defined in `parameters.py`. Most are for diagnostics, DFU (firmware updates), or subsystems like Shimano electronic shifting, Enviolo hubs, radar, and locks that this library doesn't parse yet.
+The full set of 353 `BikeParameter` IDs is defined in `parameters.py`. Most are
+for diagnostics, DFU (firmware updates), or subsystems like Shimano electronic
+shifting, Enviolo hubs, radar, and locks that this library doesn't parse yet.
 
 ---
 

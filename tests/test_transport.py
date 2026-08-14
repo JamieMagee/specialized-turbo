@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
@@ -10,8 +11,8 @@ import pytest
 from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
-from specialized_turbo.coordinator_helpers import identify_tcx
 from specialized_turbo.framing import pack_tcx, unpack_tcx
+from specialized_turbo.parameters import BikeParameter
 from specialized_turbo.protocol import (
     BLEProfile,
     BLEServiceID,
@@ -24,9 +25,12 @@ from specialized_turbo.transport import (
     BLETraceEvent,
     NotificationCallback,
     TCXNotificationTransport,
+    TCXProtocolNotNegotiatedError,
     TCXRequestTimeoutError,
+    TCXTransportDisconnectedError,
     TraceCallback,
 )
+from specialized_turbo.wire_profiles import ProtocolRevision, TCXGeneration
 
 
 @dataclass
@@ -91,8 +95,8 @@ def _transport(
 
 
 def test_identification_frame_matches_official_app() -> None:
-    frame = TCXSession().pack(build_tcx_request(301))
-    assert frame.hex() == "012d00000000000000000000000000000000e25d"
+    frame = TCXSession().pack(build_tcx_request(300))
+    assert frame.hex() == "012c00000000000000000000000000000000004d"
 
 
 @pytest.mark.asyncio
@@ -135,40 +139,6 @@ async def test_request_writes_framed_packet_and_awaits_notification() -> None:
     assert message.field_name == "battery_charge_percent"
     assert message.converted_value == 49
     assert client.writes[0][2] is False
-
-
-@pytest.mark.asyncio
-async def test_identification_installs_iv_before_encrypted_steps() -> None:
-    client = _FakeClient()
-    transport = _transport(client)
-    key = bytes.fromhex("00112233445566778899aabbccddeeff")
-    iv = bytes.fromhex("ffeeddccbbaa99887766554433221100")
-    encrypted_session = TCXSession(key=key, iv=iv)
-    seen_params: list[int] = []
-
-    def respond(_characteristic: str, packet: bytes) -> None:
-        if not seen_params:
-            payload = TCXSession().unpack(packet)
-            param_id = int.from_bytes(payload[:2], "big")
-            assert param_id == 301
-            response = TCXSession().pack(payload[:2] + iv)
-        else:
-            payload = encrypted_session.unpack(packet)
-            param_id = int.from_bytes(payload[:2], "big")
-            response = encrypted_session.pack(payload[:2] + b"\x01")
-        seen_params.append(param_id)
-        client.notify(BLEServiceID.REQUEST, response)
-
-    client.on_write = respond
-
-    session = await identify_tcx(
-        transport,
-        bike_key=key,
-        encryption_required=True,
-    )
-
-    assert session.encrypted
-    assert seen_params == [301, 311, 364, 14, 309, 330, 291]
 
 
 @pytest.mark.asyncio
@@ -233,17 +203,46 @@ async def test_request_times_out_and_clears_pending_state() -> None:
 
 
 @pytest.mark.asyncio
+async def test_disconnect_fails_pending_request_immediately() -> None:
+    client = _FakeClient()
+    transport = _transport(client, request_timeout=60)
+    request = asyncio.create_task(transport.request_parameter(26))
+    await asyncio.sleep(0)
+
+    transport.mark_disconnected()
+
+    with pytest.raises(TCXTransportDisconnectedError, match="disconnected"):
+        await request
+    with pytest.raises(TCXTransportDisconnectedError, match="disconnected"):
+        await transport.request_parameter(26)
+
+
+@pytest.mark.asyncio
 async def test_realtime_enable_uses_service_three_write() -> None:
     client = _FakeClient()
     transport = _transport(client)
+    transport.protocol_revision = ProtocolRevision(TCXGeneration.TCX2, 0x12)
 
     await transport.set_realtime_enabled(True)
 
     service = get_service_characteristics(BLEProfile.TCX, BLEServiceID.DATA)
     characteristic, packet, response = client.writes[-1]
     assert characteristic == service.write
-    assert unpack_tcx(packet)[:3] == bytes.fromhex("015b01")
+    # SYSTEM_REAL_TIME_DATA_ENB resolves to wire 0x080f, not its raw
+    # BikeParameter value (346 / 0x015a) -- see wire_profiles.
+    assert unpack_tcx(packet)[:3] == bytes.fromhex("080f01")
     assert response is False
+
+
+@pytest.mark.asyncio
+async def test_realtime_enable_requires_negotiated_revision() -> None:
+    client = _FakeClient()
+    transport = _transport(client)
+
+    with pytest.raises(
+        TCXProtocolNotNegotiatedError, match="SYSTEM_REAL_TIME_DATA_ENB"
+    ):
+        await transport.set_realtime_enabled(True)
 
 
 @pytest.mark.asyncio
@@ -264,6 +263,35 @@ async def test_trace_records_full_write_and_notification_payloads() -> None:
     assert [event.direction for event in events] == ["tx", "rx"]
     assert all(len(event.data) == 20 for event in events)
     assert events[0].service_id == BLEServiceID.REQUEST
+
+
+@pytest.mark.asyncio
+async def test_request_bike_parameter_resolves_soc_wire_0500() -> None:
+    client = _FakeClient()
+    transport = _transport(client)
+    transport.protocol_revision = ProtocolRevision(TCXGeneration.TCX2, 0x12)
+
+    def respond(characteristic: str, packet: bytes) -> None:
+        service = get_service_characteristics(BLEProfile.TCX, BLEServiceID.REQUEST)
+        assert characteristic == service.write
+        assert unpack_tcx(packet)[:2] == bytes.fromhex("0500")
+        client.notify(BLEServiceID.REQUEST, pack_tcx(bytes.fromhex("050031")))
+
+    client.on_write = respond
+    response = await transport.request_bike_parameter(
+        BikeParameter.BATTERY1_STATE_OF_CHARGE
+    )
+
+    assert parse_tcx_message(response).converted_value == 49
+
+
+@pytest.mark.asyncio
+async def test_request_bike_parameter_requires_negotiated_revision() -> None:
+    client = _FakeClient()
+    transport = _transport(client)
+
+    with pytest.raises(TCXProtocolNotNegotiatedError, match="BATTERY1_STATE_OF_CHARGE"):
+        await transport.request_bike_parameter(BikeParameter.BATTERY1_STATE_OF_CHARGE)
 
 
 @pytest.mark.asyncio

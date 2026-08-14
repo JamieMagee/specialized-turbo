@@ -25,8 +25,10 @@ from .connection import (
     find_bike_advertisement_by_address,
     scan_for_bikes,
 )
-from .key_provider import EncryptionKeyProvider
-from .parameters import all_tcx_fields
+from .coordinator_helpers import parse_tcx_wire_payload
+from .identification import IdentificationError
+from .key_provider import EncryptionKeyProvider, EncryptionKeyProviderError
+from .parameters import BikeParameter, all_tcx_fields, encode_parameter_id
 from .protocol import (
     ProtocolEncryptionMethod,
     all_field_defs,
@@ -252,10 +254,10 @@ _FIELD_NAME_MAP: dict[str, tuple[int, int]] = {}
 for _key, _fd in all_field_defs().items():
     _FIELD_NAME_MAP[_fd.name] = _key
 
-# Map human-readable names → TCX parameter ID
-_TCX_FIELD_NAME_MAP: dict[str, int] = {}
+# Map human-readable names → TCX app-level parameter
+_TCX_FIELD_NAME_MAP: dict[str, BikeParameter] = {}
 for _param_id, _tfd in all_tcx_fields().items():
-    _TCX_FIELD_NAME_MAP[_tfd.name] = _param_id
+    _TCX_FIELD_NAME_MAP[_tfd.name] = BikeParameter(_param_id)
 
 
 async def _cmd_read(args: argparse.Namespace) -> None:
@@ -271,16 +273,16 @@ async def _cmd_read(args: argparse.Namespace) -> None:
                 f"    {name:<28s}  (sender=0x{sender:02x} channel=0x{channel:02x})  [{fd.unit}]"
             )
         print("\n  TCX fields:")
-        for name, param_id in sorted(_TCX_FIELD_NAME_MAP.items()):
-            tfd = all_tcx_fields()[param_id]
-            print(f"    {name:<28s}  (param={param_id})  [{tfd.unit}]")
+        for name, param in sorted(_TCX_FIELD_NAME_MAP.items()):
+            tfd = all_tcx_fields()[int(param)]
+            print(f"    {name:<28s}  (param={int(param)})  [{tfd.unit}]")
         return
 
     # Prefer TCX field lookup, fall back to TCU1
-    tcx_param_id = _TCX_FIELD_NAME_MAP.get(field_name)
+    tcx_param = _TCX_FIELD_NAME_MAP.get(field_name)
     tcu1_key = _FIELD_NAME_MAP.get(field_name)
 
-    if tcx_param_id is None and tcu1_key is None:
+    if tcx_param is None and tcu1_key is None:
         print(f"Unknown field: {field_name}")
         print("Use 'read list' to see available fields.")
         sys.exit(1)
@@ -288,8 +290,23 @@ async def _cmd_read(args: argparse.Namespace) -> None:
     print(f"Connecting to {args.address} to read '{field_name}' ...")
 
     async with _connection(args) as conn:
-        if tcx_param_id is not None:
-            msg = await conn.request_tcx_value(tcx_param_id)
+        if tcx_param is not None:
+            wire_msg = await conn.request_tcx_parameter(tcx_param)
+            if wire_msg.nak_reason is not None:
+                print(
+                    f"{field_name}: rejected by bike "
+                    f"(reason 0x{wire_msg.nak_reason:02x})"
+                )
+                return
+            revision = conn.active_revision
+            if revision is None:
+                raise CLICommandError(
+                    "TCX identification did not negotiate a protocol revision"
+                )
+            msg = parse_tcx_wire_payload(
+                encode_parameter_id(wire_msg.wire_id) + wire_msg.data,
+                revision,
+            )
         else:
             assert tcu1_key is not None
             sender, channel = tcu1_key
@@ -572,6 +589,9 @@ def main(argv: list[str] | None = None) -> None:
     try:
         asyncio.run(coro)
     except CLICommandError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+    except (IdentificationError, EncryptionKeyProviderError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
     except KeyboardInterrupt:
