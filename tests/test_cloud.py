@@ -22,7 +22,7 @@ async def test_login_and_get_wrapped_key() -> None:
         requests.append(request)
         if request.url.path == "/rest/auth/login":
             assert json.loads(request.content) == {
-                "email": "rider@example.com",
+                "username": "rider@example.com",
                 "password": "secret",
                 "accept": [],
             }

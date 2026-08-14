@@ -84,7 +84,7 @@ class SpecializedCloudClient:
         response = await self._client.post(
             f"{_AUTH_BASE_URL}/rest/auth/login",
             headers=self._auth_api_headers(),
-            json={"email": email, "password": password, "accept": []},
+            json={"username": email, "password": password, "accept": []},
         )
         if response.status_code in {401, 403}:
             raise CloudAuthenticationError("Specialized account login failed")
