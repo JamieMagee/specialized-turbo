@@ -491,25 +491,25 @@ class TCXIdentification:
             generation,
             rev,
         )
-        firmware_msg = await self._encrypted_read(
+        firmware_msg = await self._optional_encrypted_read(
             IdentificationPhase.READ_BATTERY_FIRMWARE,
             BikeParameter.BATTERY1_FIRMWARE,
             generation,
             rev,
         )
-        hw_msg = await self._encrypted_read(
+        hw_msg = await self._optional_encrypted_read(
             IdentificationPhase.READ_HMI_HW_VERSION,
             BikeParameter.SYSTEM_HMI_HW_VERSION,
             generation,
             rev,
         )
-        motor_msg = await self._encrypted_read(
+        motor_msg = await self._optional_encrypted_read(
             IdentificationPhase.READ_MOTOR_TYPE,
             BikeParameter.SYSTEM_MOTOR_TYPE,
             generation,
             rev,
         )
-        serial_msg = await self._encrypted_read(
+        serial_msg = await self._optional_encrypted_read(
             IdentificationPhase.READ_SERIAL,
             BikeParameter.SYSTEM_EBIKE_SERIAL_NUMBER,
             generation,
@@ -518,7 +518,15 @@ class TCXIdentification:
 
         # param 14 is a firmware version, never key material: keep only its
         # 3 firmware bytes.
-        firmware = tuple(firmware_msg.data[:FIRMWARE_LENGTH])
+        firmware = (
+            tuple(firmware_msg.data[:FIRMWARE_LENGTH])
+            if firmware_msg is not None
+            else None
+        )
+        hardware = _decode_string(hw_msg.data) or None if hw_msg is not None else None
+        serial = (
+            _decode_string(serial_msg.data) or None if serial_msg is not None else None
+        )
 
         return IdentificationResult(
             generation=generation,
@@ -527,10 +535,35 @@ class TCXIdentification:
             usb_revision=usb_revision,
             system_state=state_msg.value,
             battery_firmware=firmware or None,
-            hmi_hardware_version=_decode_string(hw_msg.data) or None,
-            motor_type=motor_msg.value,
-            ebike_serial=_decode_string(serial_msg.data) or None,
+            hmi_hardware_version=hardware,
+            motor_type=motor_msg.value if motor_msg is not None else None,
+            ebike_serial=serial,
         )
+
+    async def _optional_encrypted_read(
+        self,
+        phase: IdentificationPhase,
+        parameter: BikeParameter,
+        generation: TCXGeneration,
+        revision: int,
+    ) -> WireMessage | None:
+        """Read optional identification metadata, ignoring unsupported NAKs."""
+        try:
+            return await self._encrypted_read(
+                phase,
+                parameter,
+                generation,
+                revision,
+            )
+        except IdentificationNakError as exc:
+            logger.debug(
+                "Optional identification step %s was rejected "
+                "(wire 0x%04x, reason 0x%02x)",
+                phase.value,
+                exc.wire_id,
+                exc.reason,
+            )
+            return None
 
     async def _encrypted_read(
         self,

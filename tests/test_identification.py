@@ -261,6 +261,22 @@ class TestFullHandshake:
         assert result.ebike_serial == "SN12345"
         assert result.encrypted is True
 
+    async def test_optional_firmware_nak_does_not_abort_identification(self):
+        client = _FakeClient()
+        bike = _healthy_bike(client)
+        bike.set_nak(_wire(BikeParameter.BATTERY1_FIRMWARE), 0x02)
+        transport = _transport(client)
+
+        result = await identify(
+            transport,
+            _complete_bike_info(),
+            BikeEncryptionKey(raw=KEY_RAW),
+        )
+
+        assert result.battery_firmware is None
+        assert result.hmi_hardware_version == "B.3.3"
+        assert result.ebike_serial == "SN12345"
+
     async def test_encrypted_session_installed_on_transport(self):
         client = _FakeClient()
         _healthy_bike(client)
