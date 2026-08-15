@@ -512,3 +512,18 @@ class TestIdentifyTcxLegacyShim:
 
         with pytest.raises(TCXTransportDisconnectedError):
             await task
+
+
+def test_poll_params_cover_home_assistant_entities() -> None:
+    """Poll values that are not present in the bike's real-time stream."""
+    assert {
+        BikeParameter.BATTERY1_CURRENT_LEVEL,
+        BikeParameter.BATTERY1_HEALTH,
+        BikeParameter.BATTERY1_REMAINING_CAPACITY,
+        BikeParameter.BATTERY1_TEMPERATURE,
+        BikeParameter.BATTERY1_TOTAL_CHARGE_CYCLES,
+        BikeParameter.BATTERY1_VOLTAGE_LEVEL,
+        BikeParameter.MOTOR_ACTIVE_TRAVEL_MODE,
+        BikeParameter.MOTOR_ODOMETER,
+        BikeParameter.SYSTEM_KCAL,
+    } <= set(TCX_POLL_PARAMS)
