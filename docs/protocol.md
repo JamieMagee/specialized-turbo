@@ -370,6 +370,13 @@ The app exposes stable `BikeParameter` IDs, while the bike uses separate
 app-level parameter IDs. The table below lists those with telemetry conversion
 definitions in this library.
 
+Telemetry reads use the parameter's native group ID rather than its individual
+notification ID. For example, battery current (`0x05FC`), remaining capacity
+(`0x05FF`), state of charge (`0x0500`), temperature (`0x05FE`), and voltage
+(`0x05FD`) are requested with group command `0x0500`. The bike responds with a
+batch whose notifications retain those individual IDs. A rejected group read
+returns an `F8 FF` NAK that echoes the group ID.
+
 Note that conversions differ from TCU1 in several cases. TCX battery voltage and current are 2-byte millivolt/milliamp values (`raw / 1000`), while TCU1 uses 1-byte values with different scaling (`raw / 5 + 20` for voltage, `raw / 5` for current). TCX capacity is direct watt-hours; TCU1 uses a `1.1111` multiplier.
 
 ### Battery 1
@@ -455,18 +462,22 @@ shifting, Enviolo hubs, radar, and locks that this library doesn't parse yet.
 
 1. Subscribe to service 1 notifications (`0x0011`) before identification.
 2. For each identification or read request:
-   - Build `[param_id_hi, param_id_lo]`.
+   - Build `[wire_id_hi, wire_id_lo]`. Ordinary telemetry reads use the
+     parameter's native group ID.
    - Zero-pad and append CRC-16 to make a 20-byte frame.
    - Encrypt the frame if the session negotiated AES-CTR.
    - Write it without response to service 1 characteristic `0x0021`.
-   - Await the notification on `0x0011` whose parameter ID matches the request.
+   - Await a notification on `0x0011`. Direct reads match the requested wire
+     ID. Group reads match any expected member ID, while a NAK echoes the group
+     ID.
 3. After identification, subscribe to service 3 (`0x0013`) and service 2
    (`0x0012`) notifications.
 4. Start live telemetry by writing
-   `SYSTEM_REAL_TIME_DATA_ENB` (`0x015A`) with value `0x01` to service 3:
+   `SYSTEM_REAL_TIME_DATA_ENB` (app ID `0x015A`, wire ID `0x080F`) with value
+   `0x01` to service 3:
 
    ```
-   01 5a 01 [zero padding] [crc16_le]
+   08 0f 01 [zero padding] [crc16_le]
    ```
 
    Write `0x00` to stop the stream.

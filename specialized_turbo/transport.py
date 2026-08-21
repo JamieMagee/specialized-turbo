@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from typing import Literal
 
@@ -21,7 +21,7 @@ from .protocol import (
     get_service_characteristics,
 )
 from .session import TCXSession
-from .wire_profiles import ProtocolRevision, wire_id_for
+from .wire_profiles import ProtocolRevision, get_wire_datatype, wire_id_for
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +49,8 @@ TraceCallback = Callable[[BLETraceEvent], None]
 class TCXRequestTimeoutError(TimeoutError):
     """Raised when a TCX request has no matching notification response.
 
-    ``param_id`` is the 16-bit **wire command id** that was written and never
-    answered (a NAK would have echoed it).  It is not necessarily a
+    ``param_id`` is the 16-bit wire ID used to identify the timed-out request.
+    It may be a field ID or a native read-group ID. It is not necessarily a
     :class:`~specialized_turbo.parameters.BikeParameter` value -- on a real
     bike the two spaces differ (see :mod:`specialized_turbo.wire_profiles`).
     """
@@ -89,7 +89,8 @@ class TCXProtocolNotNegotiatedError(RuntimeError):
 
 @dataclass(slots=True)
 class _PendingRequest:
-    wire_id: int
+    request_wire_id: int
+    response_wire_ids: frozenset[int]
     service_id: BLEServiceID
     future: asyncio.Future[bytes]
 
@@ -229,8 +230,37 @@ class TCXNotificationTransport:
         payload = encode_parameter_id(wire_id) + bytes(body)
         return await self._request(
             wire_id,
+            frozenset((wire_id,)),
             self._session.pack(payload),
             BLEServiceID.REQUEST,
+            timeout_wire_id=wire_id,
+            timeout=timeout,
+        )
+
+    async def request_wire_group(
+        self,
+        group_id: int,
+        response_wire_ids: Collection[int],
+        *,
+        timeout: float | None = None,
+    ) -> bytes:
+        """Request a native read group and await any expected member response.
+
+        Group reads are written using *group_id*, but successful notifications
+        retain each field's individual wire ID. A group-level NAK instead
+        echoes *group_id*.
+        """
+        expected_ids = frozenset(response_wire_ids)
+        if not expected_ids:
+            raise ValueError("response_wire_ids must not be empty")
+        await self.subscribe_for_identification()
+        payload = encode_parameter_id(group_id)
+        return await self._request(
+            group_id,
+            expected_ids,
+            self._session.pack(payload),
+            BLEServiceID.REQUEST,
+            timeout_wire_id=group_id,
             timeout=timeout,
         )
 
@@ -272,16 +302,25 @@ class TCXNotificationTransport:
     ) -> bytes:
         """Read a TCX2+ value by its stable app-level ``BikeParameter`` id.
 
-        Resolves *param* to a wire command id through the
+        Resolves *param* to a notification wire id through the
         :class:`~specialized_turbo.wire_profiles.ProtocolRevision`
-        negotiated during identification (see :attr:`protocol_revision`),
-        then correlates the response by that wire id -- this is the
-        profile-aware replacement for passing a raw wire id (or a
-        ``BikeParameter`` value that coincidentally matches one) directly
-        to :meth:`request_parameter`/:meth:`request_wire_parameter`.
+        negotiated during identification. If the native metadata defines a
+        read-group ID, that group command is written and the resulting
+        notification batch is correlated to the requested field wire id.
         """
         wire_id = self._resolve_wire_id(param)
-        return await self.request_wire_parameter(wire_id, timeout=timeout)
+        metadata = get_wire_datatype(param)
+        request_wire_id = metadata.group_id if metadata is not None else wire_id
+        await self.subscribe_for_identification()
+        payload = encode_parameter_id(request_wire_id)
+        return await self._request(
+            request_wire_id,
+            frozenset((wire_id,)),
+            self._session.pack(payload),
+            BLEServiceID.REQUEST,
+            timeout_wire_id=wire_id,
+            timeout=timeout,
+        )
 
     async def write_parameter(
         self,
@@ -343,10 +382,12 @@ class TCXNotificationTransport:
 
     async def _request(
         self,
-        wire_id: int,
+        request_wire_id: int,
+        response_wire_ids: frozenset[int],
         frame: bytes,
         service_id: BLEServiceID,
         *,
+        timeout_wire_id: int,
         timeout: float | None,
     ) -> bytes:
         request_timeout = self._request_timeout if timeout is None else timeout
@@ -355,13 +396,21 @@ class TCXNotificationTransport:
         async with self._request_lock:
             self._raise_if_disconnected()
             future = asyncio.get_running_loop().create_future()
-            self._pending = _PendingRequest(wire_id, service_id, future)
+            self._pending = _PendingRequest(
+                request_wire_id,
+                response_wire_ids,
+                service_id,
+                future,
+            )
             try:
                 await self.write_frame(service_id, frame)
                 try:
                     response = await asyncio.wait_for(future, request_timeout)
                 except TimeoutError as exc:
-                    raise TCXRequestTimeoutError(wire_id, request_timeout) from exc
+                    raise TCXRequestTimeoutError(
+                        timeout_wire_id,
+                        request_timeout,
+                    ) from exc
                 return self._session.unpack(response)
             finally:
                 if self._pending is not None and self._pending.future is future:
@@ -384,7 +433,7 @@ class TCXNotificationTransport:
             and not pending.future.done()
         ):
             try:
-                response_wire_id = self._response_wire_id(packet)
+                response_wire_id, is_nak = self._response_correlation(packet)
             except ValueError:
                 logger.debug(
                     "Ignoring uncorrelated TCX notification on service %d: %s",
@@ -392,7 +441,9 @@ class TCXNotificationTransport:
                     packet.hex(),
                 )
             else:
-                if response_wire_id == pending.wire_id:
+                if response_wire_id in pending.response_wire_ids or (
+                    is_nak and response_wire_id == pending.request_wire_id
+                ):
                     pending.future.set_result(packet)
 
         for listener in tuple(self._listeners):
@@ -401,13 +452,13 @@ class TCXNotificationTransport:
             except Exception:
                 logger.warning("TCX notification listener raised", exc_info=True)
 
-    def _response_wire_id(self, packet: bytes) -> int:
-        """Wire command id a response correlates to (a NAK echoes it)."""
+    def _response_correlation(self, packet: bytes) -> tuple[int, bool]:
+        """Return the response wire ID and whether the packet is a NAK."""
         payload = self._session.unpack(packet)
         if is_nak_packet(payload):
             wire_id, _reason = parse_nak_packet(payload)
-            return wire_id
-        return decode_parameter_id(payload)
+            return wire_id, True
+        return decode_parameter_id(payload), False
 
     def _raise_if_disconnected(self) -> None:
         if self._disconnected:

@@ -45,7 +45,12 @@ from specialized_turbo.transport import (
     TCXNotificationTransport,
     TCXTransportDisconnectedError,
 )
-from specialized_turbo.wire_profiles import ProtocolRevision, TCXGeneration, wire_id_for
+from specialized_turbo.wire_profiles import (
+    ProtocolRevision,
+    TCXGeneration,
+    get_wire_datatype,
+    wire_id_for,
+)
 
 KEY_RAW = b"\x11" * 16
 IV = b"\x22" * 16
@@ -220,16 +225,18 @@ class _FakeBike:
     def __init__(self, client: _FakeClient) -> None:
         self._client = client
         self._session = TCXSession()
-        self._payloads: dict[int, bytes] = {}
+        self._payloads: dict[int, list[bytes]] = {}
         self._naks: dict[int, int] = {}
         self.requests: list[int] = []
         client.on_write = self._on_write
 
-    def set_value(self, wire_id: int, body: bytes) -> None:
-        self._payloads[wire_id] = encode_parameter_id(wire_id) + bytes(body)
+    def set_value(self, request_id: int, wire_id: int, body: bytes) -> None:
+        self._payloads.setdefault(request_id, []).append(
+            encode_parameter_id(wire_id) + bytes(body)
+        )
 
-    def set_nak(self, wire_id: int, reason: int) -> None:
-        self._naks[wire_id] = reason
+    def set_nak(self, request_id: int, reason: int) -> None:
+        self._naks[request_id] = reason
 
     def _on_write(self, _characteristic: str, packet: bytes) -> None:
         wire_id = int.from_bytes(packet[:2], "big")
@@ -240,11 +247,13 @@ class _FakeBike:
                 + encode_parameter_id(wire_id)
                 + bytes([self._naks[wire_id]])
             )
-        elif wire_id in self._payloads:
-            frame = self._session.pack(self._payloads[wire_id])
-        else:
+            self._client.notify(BLEServiceID.REQUEST, frame)
+            return
+        payloads = self._payloads.get(wire_id)
+        if payloads is None:
             return  # no response configured -> request stays pending
-        self._client.notify(BLEServiceID.REQUEST, frame)
+        for payload in payloads:
+            self._client.notify(BLEServiceID.REQUEST, self._session.pack(payload))
 
 
 def _transport(client: _FakeClient) -> TCXNotificationTransport:
@@ -255,21 +264,32 @@ def _wire_id(param: BikeParameter, rev: ProtocolRevision) -> int:
     return wire_id_for(param, rev.generation, rev.revision)
 
 
+def _request_id(param: BikeParameter, rev: ProtocolRevision) -> int:
+    metadata = get_wire_datatype(param)
+    return metadata.group_id if metadata is not None else _wire_id(param, rev)
+
+
 class TestPollTcx:
     async def test_polls_wire_mapped_ids_and_updates_snapshot(self) -> None:
         client = _FakeClient()
         bike = _FakeBike(client)
         rev = _revision()
         for param in TCX_POLL_PARAMS:
-            bike.set_value(_wire_id(param, rev), bytes([5]))
+            bike.set_value(
+                _request_id(param, rev),
+                _wire_id(param, rev),
+                bytes([5]),
+            )
         transport = _transport(client)
         snapshot = TelemetrySnapshot()
 
         updated = await poll_tcx(transport, snapshot, rev)
 
         assert updated is True
-        # Every request used the real wire id, not the BikeParameter enum id.
-        assert bike.requests == [_wire_id(p, rev) for p in TCX_POLL_PARAMS]
+        # Each native group is requested once, even when it contains many fields.
+        assert bike.requests == list(
+            dict.fromkeys(_request_id(param, rev) for param in TCX_POLL_PARAMS)
+        )
         assert SOC_WIRE_ID in bike.requests
         assert int(BikeParameter.BATTERY1_STATE_OF_CHARGE) not in bike.requests
         assert snapshot.battery.charge_pct == 5
@@ -279,12 +299,13 @@ class TestPollTcx:
         client = _FakeClient()
         bike = _FakeBike(client)
         rev = _revision()
-        soc_wire = _wire_id(BikeParameter.BATTERY1_STATE_OF_CHARGE, rev)
-        bike.set_nak(soc_wire, 0x05)
+        soc_request = _request_id(BikeParameter.BATTERY1_STATE_OF_CHARGE, rev)
+        bike.set_nak(soc_request, 0x05)
         for param in TCX_POLL_PARAMS:
             wire = _wire_id(param, rev)
-            if wire != soc_wire:
-                bike.set_value(wire, bytes([9]))
+            request = _request_id(param, rev)
+            if request != soc_request:
+                bike.set_value(request, wire, bytes([9]))
         transport = _transport(client)
         snapshot = TelemetrySnapshot()
 
@@ -293,6 +314,64 @@ class TestPollTcx:
         assert updated is True  # other fields still updated
         assert snapshot.battery.charge_pct is None
         assert snapshot.motor.motor_power_w == 9
+        assert bike.requests.count(soc_request) == 1
+
+    async def test_existing_listener_handles_poll_notifications(self) -> None:
+        client = _FakeClient()
+        bike = _FakeBike(client)
+        rev = _revision()
+        transport = _transport(client)
+        snapshot = TelemetrySnapshot()
+
+        def listener(_sender: BleakGATTCharacteristic, data: bytearray) -> None:
+            msg = parse_tcx_notification(transport.session, data, rev)
+            if msg.nak_reason is None:
+                snapshot.update_from_message(msg)
+
+        transport.add_listener(listener)
+        for param in TCX_POLL_PARAMS:
+            bike.set_value(
+                _request_id(param, rev),
+                _wire_id(param, rev),
+                bytes([5]),
+            )
+
+        updated = await poll_tcx(transport, snapshot, rev)
+
+        assert updated is True
+        assert snapshot.battery.charge_pct == 5
+
+    async def test_realtime_notifications_do_not_count_as_poll_results(self) -> None:
+        client = _FakeClient()
+        bike = _FakeBike(client)
+        rev = _revision()
+        transport = _transport(client)
+        await transport.subscribe_for_realtime()
+        for request_id in {_request_id(param, rev) for param in TCX_POLL_PARAMS}:
+            bike.set_nak(request_id, 0x02)
+
+        bike_respond = client.on_write
+        assert bike_respond is not None
+
+        def respond(characteristic: str, packet: bytes) -> None:
+            client.notify(
+                BLEServiceID.DATA,
+                TCXSession().pack(
+                    encode_parameter_id(
+                        _wire_id(BikeParameter.BATTERY1_STATE_OF_CHARGE, rev)
+                    )
+                    + bytes([99])
+                ),
+            )
+            bike_respond(characteristic, packet)
+
+        client.on_write = respond
+        snapshot = TelemetrySnapshot()
+
+        updated = await poll_tcx(transport, snapshot, rev)
+
+        assert updated is False
+        assert snapshot.battery.charge_pct is None
 
     async def test_unmapped_parameter_is_skipped(
         self, monkeypatch: pytest.MonkeyPatch
@@ -323,7 +402,11 @@ class TestPollTcx:
         bike = _FakeBike(client)
         rev = _revision()
         for param in TCX_POLL_PARAMS:
-            bike.set_value(_wire_id(param, rev), bytes([5]))
+            bike.set_value(
+                _request_id(param, rev),
+                _wire_id(param, rev),
+                bytes([5]),
+            )
         transport = _transport(client)
         snapshot = TelemetrySnapshot()
 
@@ -351,7 +434,11 @@ class TestPollTcx:
         bike = _FakeBike(client)
         rev = _revision()
         for param in TCX_POLL_PARAMS:
-            bike.set_value(_wire_id(param, rev), bytes([5]))
+            bike.set_value(
+                _request_id(param, rev),
+                _wire_id(param, rev),
+                bytes([5]),
+            )
         transport = _transport(client)
 
         class _FlakySnapshot(TelemetrySnapshot):
