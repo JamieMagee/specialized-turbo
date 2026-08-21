@@ -116,7 +116,7 @@ class TestParseTcxWirePayload:
         range_payload = encode_parameter_id(range_wire) + bytes([100, 0])
         range_msg = parse_tcx_wire_payload(range_payload, rev)
         assert range_msg.field_name == "range_long"
-        assert range_msg.converted_value == pytest.approx(10.0)
+        assert range_msg.converted_value == 100
 
     def test_nak_is_flagged_not_parsed_as_data(self) -> None:
         payload = b"\xf8\xff" + encode_parameter_id(SOC_WIRE_ID) + bytes([0x05])
@@ -225,15 +225,23 @@ class _FakeBike:
     def __init__(self, client: _FakeClient) -> None:
         self._client = client
         self._session = TCXSession()
-        self._payloads: dict[int, list[bytes]] = {}
+        self._payloads: dict[int, bytearray] = {}
         self._naks: dict[int, int] = {}
         self.requests: list[int] = []
         client.on_write = self._on_write
 
-    def set_value(self, request_id: int, wire_id: int, body: bytes) -> None:
-        self._payloads.setdefault(request_id, []).append(
-            encode_parameter_id(wire_id) + bytes(body)
-        )
+    def set_value(
+        self,
+        param: BikeParameter,
+        value: int,
+    ) -> None:
+        metadata = get_wire_datatype(param)
+        assert metadata is not None
+        assert metadata.group_offset_bytes is not None
+        group = self._payloads.setdefault(metadata.group_id, bytearray(16))
+        start = metadata.group_offset_bytes
+        end = start + metadata.length_bytes
+        group[start:end] = value.to_bytes(metadata.length_bytes, "little")
 
     def set_nak(self, request_id: int, reason: int) -> None:
         self._naks[request_id] = reason
@@ -249,11 +257,13 @@ class _FakeBike:
             )
             self._client.notify(BLEServiceID.REQUEST, frame)
             return
-        payloads = self._payloads.get(wire_id)
-        if payloads is None:
+        payload = self._payloads.get(wire_id)
+        if payload is None:
             return  # no response configured -> request stays pending
-        for payload in payloads:
-            self._client.notify(BLEServiceID.REQUEST, self._session.pack(payload))
+        self._client.notify(
+            BLEServiceID.REQUEST,
+            self._session.pack(encode_parameter_id(wire_id) + payload),
+        )
 
 
 def _transport(client: _FakeClient) -> TCXNotificationTransport:
@@ -275,11 +285,7 @@ class TestPollTcx:
         bike = _FakeBike(client)
         rev = _revision()
         for param in TCX_POLL_PARAMS:
-            bike.set_value(
-                _request_id(param, rev),
-                _wire_id(param, rev),
-                bytes([5]),
-            )
+            bike.set_value(param, 5)
         transport = _transport(client)
         snapshot = TelemetrySnapshot()
 
@@ -295,6 +301,73 @@ class TestPollTcx:
         assert snapshot.battery.charge_pct == 5
         assert snapshot.message_count > 0
 
+    async def test_decodes_native_packed_group_layouts(self) -> None:
+        client = _FakeClient()
+        bike = _FakeBike(client)
+        rev = _revision()
+        for param in TCX_POLL_PARAMS:
+            bike.set_value(param, 0)
+
+        values = {
+            BikeParameter.BATTERY1_CURRENT_LEVEL: 10,
+            BikeParameter.BATTERY1_FULL_CAPACITY: 710,
+            BikeParameter.BATTERY1_HEALTH: 96,
+            BikeParameter.BATTERY1_REMAINING_CAPACITY: 500,
+            BikeParameter.BATTERY1_STATE_OF_CHARGE: 56,
+            BikeParameter.BATTERY1_TEMPERATURE: 25,
+            BikeParameter.BATTERY1_TOTAL_CHARGE_CYCLES: 321,
+            BikeParameter.BATTERY1_VOLTAGE_LEVEL: 175,
+            BikeParameter.MOTOR_ACTIVE_TRAVEL_MODE: 3,
+            BikeParameter.MOTOR_BIKE_CADENCE: 900,
+            BikeParameter.MOTOR_BIKE_SPEED: 123,
+            BikeParameter.MOTOR_ODOMETER: 123456,
+            BikeParameter.MOTOR_POWER: 250,
+            BikeParameter.MOTOR_RIDER_INPUT_POWER: 150,
+            BikeParameter.MOTOR_TEMPERATURE: 42,
+            BikeParameter.SYSTEM_ALT: 123,
+            BikeParameter.SYSTEM_ALT_GAIN: 1234,
+            BikeParameter.SYSTEM_CONSUMPTION: 123,
+            BikeParameter.SYSTEM_GRADIENT: 45,
+            BikeParameter.SYSTEM_KCAL: 500,
+            BikeParameter.SYSTEM_RANGE_LONG: 42,
+            BikeParameter.SYSTEM_RANGE_SHORT: 18,
+            BikeParameter.SYSTEM_STATE: 2,
+            BikeParameter.SYSTEM_TEMPERATURE: 28,
+        }
+        for param, value in values.items():
+            bike.set_value(param, value)
+
+        transport = _transport(client)
+        snapshot = TelemetrySnapshot()
+
+        updated = await poll_tcx(transport, snapshot, rev)
+
+        assert updated is True
+        assert snapshot.battery.current_a == pytest.approx(2.0)
+        assert snapshot.battery.capacity_wh == 710
+        assert snapshot.battery.health_pct == 96
+        assert snapshot.battery.remaining_wh == 500
+        assert snapshot.battery.charge_pct == 56
+        assert snapshot.battery.temp_c == 25
+        assert snapshot.battery.charge_cycles == 321
+        assert snapshot.battery.voltage_v == pytest.approx(55.0)
+        assert snapshot.motor.assist_level == 3
+        assert snapshot.motor.cadence_rpm == pytest.approx(90.0)
+        assert snapshot.motor.speed_kmh == pytest.approx(12.3)
+        assert snapshot.motor.odometer_km == pytest.approx(123.456)
+        assert snapshot.motor.motor_power_w == 250
+        assert snapshot.motor.rider_power_w == 150
+        assert snapshot.motor.motor_temp_c == 42
+        assert snapshot.system.altitude_m == 123
+        assert snapshot.system.altitude_gain_m == pytest.approx(123.4)
+        assert snapshot.system.consumption_wh_km == pytest.approx(12.3)
+        assert snapshot.system.gradient_pct == pytest.approx(4.5)
+        assert snapshot.system.kcal == 500
+        assert snapshot.system.range_long_km == 42
+        assert snapshot.system.range_short_km == 18
+        assert snapshot.system.system_state == 2
+        assert snapshot.system.system_temp_c == 28
+
     async def test_nak_is_skipped_without_touching_snapshot(self) -> None:
         client = _FakeClient()
         bike = _FakeBike(client)
@@ -302,10 +375,9 @@ class TestPollTcx:
         soc_request = _request_id(BikeParameter.BATTERY1_STATE_OF_CHARGE, rev)
         bike.set_nak(soc_request, 0x05)
         for param in TCX_POLL_PARAMS:
-            wire = _wire_id(param, rev)
             request = _request_id(param, rev)
             if request != soc_request:
-                bike.set_value(request, wire, bytes([9]))
+                bike.set_value(param, 9)
         transport = _transport(client)
         snapshot = TelemetrySnapshot()
 
@@ -330,11 +402,7 @@ class TestPollTcx:
 
         transport.add_listener(listener)
         for param in TCX_POLL_PARAMS:
-            bike.set_value(
-                _request_id(param, rev),
-                _wire_id(param, rev),
-                bytes([5]),
-            )
+            bike.set_value(param, 5)
 
         updated = await poll_tcx(transport, snapshot, rev)
 
@@ -402,11 +470,7 @@ class TestPollTcx:
         bike = _FakeBike(client)
         rev = _revision()
         for param in TCX_POLL_PARAMS:
-            bike.set_value(
-                _request_id(param, rev),
-                _wire_id(param, rev),
-                bytes([5]),
-            )
+            bike.set_value(param, 5)
         transport = _transport(client)
         snapshot = TelemetrySnapshot()
 
@@ -434,11 +498,7 @@ class TestPollTcx:
         bike = _FakeBike(client)
         rev = _revision()
         for param in TCX_POLL_PARAMS:
-            bike.set_value(
-                _request_id(param, rev),
-                _wire_id(param, rev),
-                bytes([5]),
-            )
+            bike.set_value(param, 5)
         transport = _transport(client)
 
         class _FlakySnapshot(TelemetrySnapshot):

@@ -286,7 +286,7 @@ async def test_request_bike_parameter_resolves_soc_wire_0500() -> None:
 
 
 @pytest.mark.asyncio
-async def test_request_bike_parameter_uses_group_and_awaits_target() -> None:
+async def test_request_bike_parameter_extracts_target_from_group() -> None:
     client = _FakeClient()
     transport = _transport(client)
     transport.protocol_revision = ProtocolRevision(TCXGeneration.TCX2, 0x33)
@@ -296,21 +296,20 @@ async def test_request_bike_parameter_uses_group_and_awaits_target() -> None:
     def respond(characteristic: str, packet: bytes) -> None:
         service = get_service_characteristics(BLEProfile.TCX, BLEServiceID.REQUEST)
         assert characteristic == service.write
-        # BATTERY1_CURRENT_LEVEL notifies as 0x05fc but reads through group 0x0500.
+        # BATTERY1_CURRENT_LEVEL is byte 5 of packed group 0x0500.
         assert unpack_tcx(packet)[:2] == bytes.fromhex("0500")
-        client.notify(BLEServiceID.REQUEST, pack_tcx(bytes.fromhex("050031")))
-        client.notify(BLEServiceID.REQUEST, pack_tcx(bytes.fromhex("05fc6400")))
+        client.notify(
+            BLEServiceID.REQUEST,
+            pack_tcx(bytes.fromhex("0500310000000064")),
+        )
 
     client.on_write = respond
     response = await transport.request_bike_parameter(
         BikeParameter.BATTERY1_CURRENT_LEVEL
     )
 
-    assert response[:4] == bytes.fromhex("05fc6400")
-    assert [unpack_tcx(packet)[:2] for packet in seen] == [
-        bytes.fromhex("0500"),
-        bytes.fromhex("05fc"),
-    ]
+    assert response == bytes.fromhex("05fc64")
+    assert [unpack_tcx(packet)[:2] for packet in seen] == [bytes.fromhex("0500")]
 
 
 @pytest.mark.asyncio
@@ -337,7 +336,7 @@ async def test_group_request_returns_group_nak() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wire_group_completes_on_non_group_member_response() -> None:
+async def test_wire_group_completes_on_group_response() -> None:
     client = _FakeClient()
     transport = _transport(client)
 
@@ -345,7 +344,7 @@ async def test_wire_group_completes_on_non_group_member_response() -> None:
         assert unpack_tcx(packet)[:2] == bytes.fromhex("0800")
         client.notify(
             BLEServiceID.REQUEST,
-            pack_tcx(bytes.fromhex("08fe6400")),
+            pack_tcx(bytes.fromhex("080000000000000000006400000000000000")),
         )
 
     client.on_write = respond
@@ -354,7 +353,7 @@ async def test_wire_group_completes_on_non_group_member_response() -> None:
         (0x08FC, 0x08FD, 0x08FE),
     )
 
-    assert response[:4] == bytes.fromhex("08fe6400")
+    assert response[:2] == bytes.fromhex("0800")
 
 
 @pytest.mark.asyncio

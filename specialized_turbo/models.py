@@ -158,8 +158,8 @@ class SystemState:
     consumption_wh_km: float | None = None
     kcal: int | None = None
     altitude_m: int | None = None
-    altitude_gain_m: int | None = None
-    altitude_descent_m: int | None = None
+    altitude_gain_m: float | None = None
+    altitude_descent_m: float | None = None
     gradient_pct: float | None = None
     system_state: int | None = None
 

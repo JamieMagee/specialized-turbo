@@ -13,7 +13,6 @@ import asyncio
 import logging
 
 from bleak import BleakClient
-from bleak.backends.characteristic import BleakGATTCharacteristic
 
 from .framing import (
     is_framed_packet,
@@ -25,11 +24,8 @@ from .models import TelemetrySnapshot
 from .parameters import BikeParameter, get_tcx_field
 from .protocol import (
     TCU1_POLL_FIELDS,
-    BLEProfile,
-    BLEServiceID,
     ParsedMessage,
     build_request,
-    get_service_characteristics,
     parse_message,
     parse_tcx_message,
 )
@@ -38,6 +34,7 @@ from .transport import TCXNotificationTransport, TCXTransportDisconnectedError
 from .wire_profiles import (
     ProtocolRevision,
     UnmappedParameterError,
+    extract_group_parameter_payload,
     get_wire_datatype,
     wire_id_for,
 )
@@ -118,10 +115,9 @@ def _wire_message_to_parsed_message(msg: WireMessage) -> ParsedMessage:
         )
 
     field_def = get_tcx_field(int(msg.parameter)) if msg.parameter is not None else None
-    payload = msg.data.rstrip(b"\x00")
-
     if field_def is None:
         # Unknown/unmapped parameter -- surface the raw bytes without a name.
+        payload = msg.data.rstrip(b"\x00")
         raw = int.from_bytes(payload, "little") if payload else 0
         return ParsedMessage(
             sender=sender,
@@ -132,7 +128,7 @@ def _wire_message_to_parsed_message(msg: WireMessage) -> ParsedMessage:
             unit="",
         )
 
-    if not payload:
+    if msg.value is None:
         return ParsedMessage(
             sender=sender,
             channel=channel,
@@ -142,8 +138,7 @@ def _wire_message_to_parsed_message(msg: WireMessage) -> ParsedMessage:
             unit=field_def.unit,
         )
 
-    actual_size = min(field_def.data_size, len(payload))
-    raw = int.from_bytes(payload[:actual_size], "little")
+    raw = msg.value
     return ParsedMessage(
         sender=sender,
         channel=channel,
@@ -233,17 +228,14 @@ async def poll_tcx(
     """Poll TCX fields through write/notification transactions.
 
     Parameters are grouped by their native read-group ID. Each group command is
-    written once; every notification in the resulting batch is parsed into the
-    snapshot. A bike disconnect is the one failure that propagates immediately.
+    written once, then every field is sliced from the packed response body and
+    parsed into the snapshot. A bike disconnect is the one failure that
+    propagates immediately.
 
     Returns ``True`` if any field was updated.
     """
     transport.protocol_revision = revision
-    initial_message_count = snapshot.message_count
-    request_notify_uuid = get_service_characteristics(
-        BLEProfile.TCX,
-        BLEServiceID.REQUEST,
-    ).notify
+    updated = False
     groups: dict[int, list[tuple[BikeParameter, int]]] = {}
     for param in TCX_POLL_PARAMS:
         try:
@@ -257,58 +249,70 @@ async def poll_tcx(
             )
             continue
         metadata = get_wire_datatype(param)
-        request_id = metadata.group_id if metadata is not None else wire_id
+        request_id = (
+            metadata.group_id
+            if metadata is not None and metadata.group_offset_bytes is not None
+            else wire_id
+        )
         groups.setdefault(request_id, []).append((param, wire_id))
 
-    def handle_notification(
-        sender: BleakGATTCharacteristic,
-        data: bytearray,
-    ) -> None:
-        if sender.uuid.lower() != request_notify_uuid or not data:
-            return
+    for request_id, members in groups.items():
         try:
-            msg = parse_tcx_notification(transport.session, data, revision)
-            if msg.nak_reason is not None:
-                return
-            snapshot.update_from_message(msg)
+            payload = await transport.request_wire_group(request_id, ())
+        except TCXTransportDisconnectedError:
+            raise
         except Exception:
             logger.debug(
-                "Failed to parse TCX group notification: %s",
-                bytes(data).hex(),
+                "Failed to poll TCX group 0x%04x (%s)",
+                request_id,
+                ", ".join(param.name for param, _wire_id in members),
                 exc_info=True,
             )
+            continue
 
-    transport.add_listener(handle_notification)
-    try:
-        for request_id, members in groups.items():
+        if is_nak_packet(payload):
+            _echoed, reason = parse_nak_packet(payload)
+            logger.debug(
+                "TCX group 0x%04x rejected with reason 0x%02x",
+                request_id,
+                reason,
+            )
+            continue
+
+        for param, wire_id in members:
             try:
-                payload = await transport.request_wire_group(
-                    request_id,
-                    [wire_id for _param, wire_id in members],
+                field_payload = extract_group_parameter_payload(
+                    payload,
+                    param,
+                    revision.generation,
+                    revision.revision,
                 )
-            except TCXTransportDisconnectedError:
-                raise
+                msg = parse_tcx_wire_payload(field_payload, revision)
             except Exception:
                 logger.debug(
-                    "Failed to poll TCX group 0x%04x (%s)",
+                    "Failed to parse TCX %s from group 0x%04x (wire 0x%04x): %s",
+                    param.name,
                     request_id,
-                    ", ".join(param.name for param, _wire_id in members),
+                    wire_id,
+                    payload.hex(),
                     exc_info=True,
                 )
                 continue
 
-            if is_nak_packet(payload):
-                _echoed, reason = parse_nak_packet(payload)
+            try:
+                snapshot.update_from_message(msg)
+            except Exception:
                 logger.debug(
-                    "TCX group 0x%04x rejected with reason 0x%02x",
+                    "Failed to update snapshot from TCX %s (group 0x%04x, wire 0x%04x)",
+                    param.name,
                     request_id,
-                    reason,
+                    wire_id,
+                    exc_info=True,
                 )
-            await asyncio.sleep(0.05)
-    finally:
-        transport.remove_listener(handle_notification)
+                continue
+            updated = True
 
-    return snapshot.message_count > initial_message_count
+    return updated
 
 
 async def identify_tcx(

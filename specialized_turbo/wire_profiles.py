@@ -37,7 +37,7 @@ from enum import IntEnum, StrEnum
 from functools import cache
 
 from . import _wire_map_data as _data
-from .parameters import BikeParameter
+from .parameters import BikeParameter, decode_parameter_id, encode_parameter_id
 
 # ---------------------------------------------------------------------------
 # Generation / revision / profile types
@@ -101,6 +101,56 @@ class WireDatatypeInfo:
     datatype: WireDatatype
     length_bytes: int
     group_id: int
+    group_offset_bytes: int | None
+
+
+# Native ``ParameterInfo`` stores each grouped field's byte offset separately
+# from its datatype, length, and group ID. These offsets are identical across
+# the checked TCX2, TCX3, and TCX4 protocol constructors in app v1.70.1.
+_GROUP_OFFSETS: dict[BikeParameter, int] = {
+    BikeParameter.BATTERY1_CHARGING_ACTIVE: 7,
+    BikeParameter.BATTERY1_CURRENT_LEVEL: 5,
+    BikeParameter.BATTERY1_FIRMWARE: 2,
+    BikeParameter.BATTERY1_FULL_CAPACITY: 0,
+    BikeParameter.BATTERY1_HEALTH: 2,
+    BikeParameter.BATTERY1_ON_BIKE_CHARGE_CYCLES: 5,
+    BikeParameter.BATTERY1_REMAINING_CAPACITY: 1,
+    BikeParameter.BATTERY1_STATE_OF_CHARGE: 0,
+    BikeParameter.BATTERY1_TEMPERATURE: 3,
+    BikeParameter.BATTERY1_TOTAL_CHARGE_CYCLES: 3,
+    BikeParameter.BATTERY1_VOLTAGE_LEVEL: 4,
+    BikeParameter.BATTERY2_CURRENT_LEVEL: 5,
+    BikeParameter.BATTERY2_FULL_CAPACITY: 0,
+    BikeParameter.BATTERY2_HEALTH: 2,
+    BikeParameter.BATTERY2_REMAINING_CAPACITY: 1,
+    BikeParameter.BATTERY2_STATE_OF_CHARGE: 0,
+    BikeParameter.BATTERY2_TEMPERATURE: 3,
+    BikeParameter.BATTERY2_TOTAL_CHARGE_CYCLES: 3,
+    BikeParameter.BATTERY2_VOLTAGE_LEVEL: 4,
+    BikeParameter.MOTOR_ACTIVE_TRAVEL_MODE: 13,
+    BikeParameter.MOTOR_BIKE_CADENCE: 2,
+    BikeParameter.MOTOR_BIKE_SPEED: 0,
+    BikeParameter.MOTOR_MAX_SPEED_LIMIT: 8,
+    BikeParameter.MOTOR_ODOMETER: 8,
+    BikeParameter.MOTOR_POWER: 6,
+    BikeParameter.MOTOR_RIDER_INPUT_POWER: 4,
+    BikeParameter.MOTOR_TEMPERATURE: 12,
+    BikeParameter.MOTOR_WHEEL_SIZE: 10,
+    BikeParameter.SYSTEM_ALT: 8,
+    BikeParameter.SYSTEM_ALT_DESCENT: 3,
+    BikeParameter.SYSTEM_ALT_GAIN: 0,
+    BikeParameter.SYSTEM_BIKE_TYPE: 14,
+    BikeParameter.SYSTEM_CONSUMPTION: 13,
+    BikeParameter.SYSTEM_GRADIENT: 11,
+    BikeParameter.SYSTEM_HMI_HW_VERSION: 0,
+    BikeParameter.SYSTEM_KCAL: 6,
+    BikeParameter.SYSTEM_MOTOR_TYPE: 2,
+    BikeParameter.SYSTEM_RANGE_LONG: 8,
+    BikeParameter.SYSTEM_RANGE_SHORT: 10,
+    BikeParameter.SYSTEM_RANGE_TREND: 12,
+    BikeParameter.SYSTEM_STATE: 0,
+    BikeParameter.SYSTEM_TEMPERATURE: 10,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -295,11 +345,54 @@ def identification_parameters() -> frozenset[BikeParameter]:
 
 
 def get_wire_datatype(param: BikeParameter) -> WireDatatypeInfo | None:
-    """Return datatype/length/group metadata for ``param``, or ``None`` if unknown."""
+    """Return datatype and group-layout metadata, or ``None`` if unknown."""
     entry = _data.DATATYPES.get(int(param))
     if entry is None:
         return None
     datatype, length_bytes, group_id = entry
     return WireDatatypeInfo(
-        datatype=WireDatatype(datatype), length_bytes=length_bytes, group_id=group_id
+        datatype=WireDatatype(datatype),
+        length_bytes=length_bytes,
+        group_id=group_id,
+        group_offset_bytes=_GROUP_OFFSETS.get(param),
     )
+
+
+def extract_group_parameter_payload(
+    payload: bytes | bytearray,
+    param: BikeParameter,
+    generation: TCXGeneration,
+    revision: int,
+) -> bytes:
+    """Extract one field from a native group response.
+
+    A grouped response retains the group ID in its 2-byte header and packs
+    every member into fixed offsets in the 16-byte body. Individual field
+    responses are returned unchanged.
+    """
+    if len(payload) < 2:
+        raise ValueError(f"Payload too short ({len(payload)} bytes), need at least 2")
+
+    response_wire_id = decode_parameter_id(payload)
+    target_wire_id = wire_id_for(param, generation, revision)
+    info = get_wire_datatype(param)
+    if (
+        info is None
+        or info.group_offset_bytes is None
+        or response_wire_id != info.group_id
+    ):
+        if response_wire_id != target_wire_id:
+            raise ValueError(
+                f"Response wire id 0x{response_wire_id:04x} does not match "
+                f"{param.name} (wire 0x{target_wire_id:04x})"
+            )
+        return bytes(payload)
+
+    start = 2 + info.group_offset_bytes
+    end = start + info.length_bytes
+    if len(payload) < end:
+        raise ValueError(
+            f"Group 0x{info.group_id:04x} payload is too short for {param.name}: "
+            f"{len(payload)} bytes, need at least {end}"
+        )
+    return encode_parameter_id(target_wire_id) + bytes(payload[start:end])

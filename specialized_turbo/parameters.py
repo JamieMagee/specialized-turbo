@@ -483,15 +483,15 @@ _tcx(
     BikeParameter.BATTERY1_VOLTAGE_LEVEL,
     "battery_voltage",
     "V",
-    2,
-    lambda v: v / 1000.0,
+    1,
+    lambda v: v / 5.0 + 20.0,
 )
 _tcx(
     BikeParameter.BATTERY1_CURRENT_LEVEL,
     "battery_current",
     "A",
-    2,
-    lambda v: v / 1000.0,
+    1,
+    lambda v: v / 5.0,
 )
 _tcx(BikeParameter.BATTERY1_HEALTH, "battery_health", "%", 1)
 _tcx(BikeParameter.BATTERY1_FULL_CAPACITY, "battery_capacity_wh", "Wh", 2)
@@ -512,15 +512,15 @@ _tcx(
     BikeParameter.BATTERY2_VOLTAGE_LEVEL,
     "battery2_voltage",
     "V",
-    2,
-    lambda v: v / 1000.0,
+    1,
+    lambda v: v / 5.0 + 20.0,
 )
 _tcx(
     BikeParameter.BATTERY2_CURRENT_LEVEL,
     "battery2_current",
     "A",
-    2,
-    lambda v: v / 1000.0,
+    1,
+    lambda v: v / 5.0,
 )
 _tcx(BikeParameter.BATTERY2_HEALTH, "battery2_health", "%", 1)
 _tcx(BikeParameter.BATTERY2_FULL_CAPACITY, "battery2_capacity_wh", "Wh", 2)
@@ -571,15 +571,27 @@ _tcx(
 
 # --- System ---
 _tcx(BikeParameter.SYSTEM_STATE, "system_state", "", 1)
-_tcx(BikeParameter.SYSTEM_RANGE_LONG, "range_long", "km", 2, lambda v: v / 10.0)
-_tcx(BikeParameter.SYSTEM_RANGE_SHORT, "range_short", "km", 2, lambda v: v / 10.0)
+_tcx(BikeParameter.SYSTEM_RANGE_LONG, "range_long", "km", 2)
+_tcx(BikeParameter.SYSTEM_RANGE_SHORT, "range_short", "km", 2)
 _tcx(BikeParameter.SYSTEM_RANGE_TREND, "range_trend", "", 1)
 _tcx(BikeParameter.SYSTEM_TEMPERATURE, "system_temp", "°C", 1)
-_tcx(BikeParameter.SYSTEM_CONSUMPTION, "consumption", "Wh/km", 2)
+_tcx(
+    BikeParameter.SYSTEM_CONSUMPTION,
+    "consumption",
+    "Wh/km",
+    2,
+    lambda v: v / 10.0,
+)
 _tcx(BikeParameter.SYSTEM_KCAL, "kcal", "kcal", 2)
 _tcx(BikeParameter.SYSTEM_ALT, "altitude", "m", 2)
-_tcx(BikeParameter.SYSTEM_ALT_GAIN, "altitude_gain", "m", 2)
-_tcx(BikeParameter.SYSTEM_ALT_DESCENT, "altitude_descent", "m", 2)
+_tcx(BikeParameter.SYSTEM_ALT_GAIN, "altitude_gain", "m", 3, lambda v: v / 10.0)
+_tcx(
+    BikeParameter.SYSTEM_ALT_DESCENT,
+    "altitude_descent",
+    "m",
+    3,
+    lambda v: v / 10.0,
+)
 _tcx(BikeParameter.SYSTEM_GRADIENT, "gradient", "%", 2, lambda v: v / 10.0)
 
 # --- Identification ---

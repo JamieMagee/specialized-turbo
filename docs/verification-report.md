@@ -23,7 +23,7 @@ not GATT reads.
 | GATT UUID bases | ✅ Verified | TURBOHMI and GIGATRONIK bases match exactly |
 | Service short IDs (0x01/0x02/0x03) | ✅ Verified | |
 | Characteristic short IDs (0x11/0x12/0x13/0x21/0x22/0x23) | ✅ Verified | Three notify/write pairs |
-| TCX transaction model | ✅ Verified | Write without response; grouped reads return field-ID notifications |
+| TCX transaction model | ✅ Verified | Write without response; grouped reads return packed group-ID packets |
 | CRC-16/CCITT-FALSE | ✅ Verified | Native `CRC16Calculator` matches `crc_hqx` |
 | AES-128-CTR encryption | ✅ Verified | `ProtocolEncryptionMethod.AES_CTR` confirmed |
 | Cloud key pipeline | ✅ Verified | Keystore API → base64 unwrap → 16-byte bike key |
@@ -327,14 +327,15 @@ Parameter 14 contains firmware metadata, not key material.
 
 `CommonProtocol::encodeReadRequest()` passes each parameter through the native
 parameter encoder. For ordinary telemetry this encoder writes the parameter's
-group ID, not its individual notification ID. One group request can therefore
-produce several notifications, each carrying the wire ID of its own field.
+group ID, not its individual wire ID. `CommonProtocol::decode()` then finds the
+same `ParameterGroupInfo` and extracts each member from its fixed byte offset
+inside the response body.
 
 For example, battery current (`0x05FC`), remaining capacity (`0x05FF`), state
 of charge (`0x0500`), temperature (`0x05FE`), and voltage (`0x05FD`) all use
-request group `0x0500`. If the bike rejects the read, the `F8 FF` NAK echoes
-`0x0500`. The transport must keep the request group ID separate from the field
-IDs accepted as successful responses.
+request group `0x0500`. The successful response also has header `0x0500`, with
+those values at body offsets 5, 1, 0, 3, and 4. If the bike rejects the read,
+the `F8 FF` NAK echoes `0x0500`.
 
 ### Field Decoders — Decompiled ✅
 

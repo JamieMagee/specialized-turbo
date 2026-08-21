@@ -21,7 +21,12 @@ from .protocol import (
     get_service_characteristics,
 )
 from .session import TCXSession
-from .wire_profiles import ProtocolRevision, get_wire_datatype, wire_id_for
+from .wire_profiles import (
+    ProtocolRevision,
+    extract_group_parameter_payload,
+    get_wire_datatype,
+    wire_id_for,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -244,15 +249,14 @@ class TCXNotificationTransport:
         *,
         timeout: float | None = None,
     ) -> bytes:
-        """Request a native read group and await any expected member response.
+        """Request a native read group and await its packed response.
 
-        Group reads are written using *group_id*, but successful notifications
-        retain each field's individual wire ID. A group-level NAK instead
-        echoes *group_id*.
+        Current TCX firmware returns the group ID in the response header and
+        packs all member values into fixed offsets in the body. Individual
+        member IDs are also accepted for compatibility with older captures.
+        A group-level NAK echoes *group_id*.
         """
-        expected_ids = frozenset(response_wire_ids)
-        if not expected_ids:
-            raise ValueError("response_wire_ids must not be empty")
+        expected_ids = frozenset((group_id, *response_wire_ids))
         await self.subscribe_for_identification()
         payload = encode_parameter_id(group_id)
         return await self._request(
@@ -306,20 +310,29 @@ class TCXNotificationTransport:
         :class:`~specialized_turbo.wire_profiles.ProtocolRevision`
         negotiated during identification. If the native metadata defines a
         read-group ID, that group command is written and the resulting
-        notification batch is correlated to the requested field wire id.
+        packed group response is sliced to the requested field.
         """
         wire_id = self._resolve_wire_id(param)
         metadata = get_wire_datatype(param)
-        request_wire_id = metadata.group_id if metadata is not None else wire_id
-        await self.subscribe_for_identification()
-        payload = encode_parameter_id(request_wire_id)
-        return await self._request(
+        request_wire_id = (
+            metadata.group_id
+            if metadata is not None and metadata.group_offset_bytes is not None
+            else wire_id
+        )
+        response = await self.request_wire_group(
             request_wire_id,
-            frozenset((wire_id,)),
-            self._session.pack(payload),
-            BLEServiceID.REQUEST,
-            timeout_wire_id=wire_id,
+            (wire_id,),
             timeout=timeout,
+        )
+        if is_nak_packet(response):
+            return response
+        revision = self._protocol_revision
+        assert revision is not None
+        return extract_group_parameter_payload(
+            response,
+            param,
+            revision.generation,
+            revision.revision,
         )
 
     async def write_parameter(

@@ -371,20 +371,23 @@ app-level parameter IDs. The table below lists those with telemetry conversion
 definitions in this library.
 
 Telemetry reads use the parameter's native group ID rather than its individual
-notification ID. For example, battery current (`0x05FC`), remaining capacity
+wire ID. For example, battery current (`0x05FC`), remaining capacity
 (`0x05FF`), state of charge (`0x0500`), temperature (`0x05FE`), and voltage
-(`0x05FD`) are requested with group command `0x0500`. The bike responds with a
-batch whose notifications retain those individual IDs. A rejected group read
-returns an `F8 FF` NAK that echoes the group ID.
+(`0x05FD`) are requested with group command `0x0500`. The response header
+remains `0x0500`; its 16-byte body packs those fields at offsets 5, 1, 0, 3,
+and 4 respectively. A rejected group read returns an `F8 FF` NAK that echoes
+the group ID.
 
-Note that conversions differ from TCU1 in several cases. TCX battery voltage and current are 2-byte millivolt/milliamp values (`raw / 1000`), while TCU1 uses 1-byte values with different scaling (`raw / 5 + 20` for voltage, `raw / 5` for current). TCX capacity is direct watt-hours; TCU1 uses a `1.1111` multiplier.
+TCX grouped battery voltage and current use the same 1-byte scaling as TCU1:
+`raw / 5 + 20` for voltage and `raw / 5` for current. TCX capacity is direct
+watt-hours; TCU1 uses a `1.1111` multiplier.
 
 ### Battery 1
 
 | Param ID | Name | Field name | Unit | Size | Conversion |
 | --- | --- | --- | --- | --- | --- |
 | 0 | `BATTERY1_CHARGING_ACTIVE` | `battery_charging_active` | | 1B | direct |
-| 1 | `BATTERY1_CURRENT_LEVEL` | `battery_current` | A | 2B | `raw / 1000` |
+| 1 | `BATTERY1_CURRENT_LEVEL` | `battery_current` | A | 1B | `raw / 5` |
 | 15 | `BATTERY1_FULL_CAPACITY` | `battery_capacity_wh` | Wh | 2B | direct |
 | 17 | `BATTERY1_HEALTH` | `battery_health` | % | 1B | direct |
 | 20 | `BATTERY1_ON_BIKE_CHARGE_CYCLES` | `battery_on_bike_charge_cycles` | cycles | 2B | direct |
@@ -392,20 +395,20 @@ Note that conversions differ from TCU1 in several cases. TCX battery voltage and
 | 26 | `BATTERY1_STATE_OF_CHARGE` | `battery_charge_percent` | % | 1B | direct |
 | 27 | `BATTERY1_TEMPERATURE` | `battery_temp` | C | 1B | direct |
 | 28 | `BATTERY1_TOTAL_CHARGE_CYCLES` | `battery_charge_cycles` | cycles | 2B | direct |
-| 29 | `BATTERY1_VOLTAGE_LEVEL` | `battery_voltage` | V | 2B | `raw / 1000` |
+| 29 | `BATTERY1_VOLTAGE_LEVEL` | `battery_voltage` | V | 1B | `raw / 5 + 20` |
 
 ### Battery 2
 
 | Param ID | Name | Field name | Unit | Size | Conversion |
 | --- | --- | --- | --- | --- | --- |
-| 31 | `BATTERY2_CURRENT_LEVEL` | `battery2_current` | A | 2B | `raw / 1000` |
+| 31 | `BATTERY2_CURRENT_LEVEL` | `battery2_current` | A | 1B | `raw / 5` |
 | 44 | `BATTERY2_FULL_CAPACITY` | `battery2_capacity_wh` | Wh | 2B | direct |
 | 46 | `BATTERY2_HEALTH` | `battery2_health` | % | 1B | direct |
 | 51 | `BATTERY2_REMAINING_CAPACITY` | `battery2_remaining_wh` | Wh | 2B | direct |
 | 54 | `BATTERY2_STATE_OF_CHARGE` | `battery2_charge_percent` | % | 1B | direct |
 | 55 | `BATTERY2_TEMPERATURE` | `battery2_temp` | C | 1B | direct |
 | 56 | `BATTERY2_TOTAL_CHARGE_CYCLES` | `battery2_charge_cycles` | cycles | 2B | direct |
-| 57 | `BATTERY2_VOLTAGE_LEVEL` | `battery2_voltage` | V | 2B | `raw / 1000` |
+| 57 | `BATTERY2_VOLTAGE_LEVEL` | `battery2_voltage` | V | 1B | `raw / 5 + 20` |
 
 ### Motor and rider
 
@@ -427,13 +430,13 @@ Note that conversions differ from TCU1 in several cases. TCX battery voltage and
 | Param ID | Name | Field name | Unit | Size | Conversion |
 | --- | --- | --- | --- | --- | --- |
 | 243 | `SYSTEM_ALT` | `altitude` | m | 2B | direct |
-| 245 | `SYSTEM_ALT_DESCENT` | `altitude_descent` | m | 2B | direct |
-| 246 | `SYSTEM_ALT_GAIN` | `altitude_gain` | m | 2B | direct |
-| 280 | `SYSTEM_CONSUMPTION` | `consumption` | Wh/km | 2B | direct |
+| 245 | `SYSTEM_ALT_DESCENT` | `altitude_descent` | m | 3B | `raw / 10` |
+| 246 | `SYSTEM_ALT_GAIN` | `altitude_gain` | m | 3B | `raw / 10` |
+| 280 | `SYSTEM_CONSUMPTION` | `consumption` | Wh/km | 2B | `raw / 10` |
 | 303 | `SYSTEM_GRADIENT` | `gradient` | % | 2B | `raw / 10` |
 | 321 | `SYSTEM_KCAL` | `kcal` | kcal | 2B | direct |
-| 342 | `SYSTEM_RANGE_LONG` | `range_long` | km | 2B | `raw / 10` |
-| 343 | `SYSTEM_RANGE_SHORT` | `range_short` | km | 2B | `raw / 10` |
+| 342 | `SYSTEM_RANGE_LONG` | `range_long` | km | 2B | direct |
+| 343 | `SYSTEM_RANGE_SHORT` | `range_short` | km | 2B | direct |
 | 344 | `SYSTEM_RANGE_TREND` | `range_trend` | | 1B | direct |
 | 364 | `SYSTEM_STATE` | `system_state` | | 1B | direct |
 | 372 | `SYSTEM_TEMPERATURE` | `system_temp` | C | 1B | direct |
@@ -468,8 +471,8 @@ shifting, Enviolo hubs, radar, and locks that this library doesn't parse yet.
    - Encrypt the frame if the session negotiated AES-CTR.
    - Write it without response to service 1 characteristic `0x0021`.
    - Await a notification on `0x0011`. Direct reads match the requested wire
-     ID. Group reads match any expected member ID, while a NAK echoes the group
-     ID.
+     ID. Group responses retain the group ID and pack member values into fixed
+     offsets in the body. A NAK also echoes the group ID.
 3. After identification, subscribe to service 3 (`0x0013`) and service 2
    (`0x0012`) notifications.
 4. Start live telemetry by writing
@@ -551,7 +554,9 @@ value: 0-100
 
 2. **Request-read interference**: on TCU1, do request-reads while notifications are paused to avoid garbled responses. TCX does not use GATT reads.
 
-3. **TCU1 voltage/current formulas**: the conversions (`raw/5+20` for voltage, `raw/5` for current) are noted as approximate in the Sepp62 source. TCX2+ uses millivolt/milliamp values directly, which avoids this ambiguity.
+3. **Battery voltage/current formulas**: the conversions (`raw/5+20` for
+   voltage, `raw/5` for current) were first documented for TCU1 and are also
+   present in the native TCX2+ grouped-field metadata.
 
 4. **TCU1 battery Wh factor**: the `1.1111` multiplier may vary across battery packs. TCX2+ reports Wh directly.
 

@@ -19,6 +19,7 @@ from specialized_turbo.wire_profiles import (
     WireDatatype,
     bike_parameter_for_identification_wire_id,
     bike_parameter_for_wire_id,
+    extract_group_parameter_payload,
     get_wire_datatype,
     identification_parameters,
     identification_wire_id_for,
@@ -254,6 +255,8 @@ class TestDatatypes:
         info = get_wire_datatype(BikeParameter.BATTERY1_VOLTAGE_LEVEL)
         assert info is not None
         assert info.datatype == WireDatatype.FLOAT
+        assert info.length_bytes == 1
+        assert info.group_offset_bytes == 4
 
     def test_firmware_datatype(self):
         info = get_wire_datatype(BikeParameter.BATTERY1_FIRMWARE)
@@ -307,6 +310,49 @@ class TestDatatypes:
 
     def test_unknown_param_returns_none(self):
         assert get_wire_datatype(BikeParameter.SYSTEM_STATUS) is None
+
+
+class TestGroupPayloads:
+    def test_extracts_field_by_native_offset(self):
+        payload = bytes.fromhex("050038f40119af0a") + bytes(10)
+
+        current = extract_group_parameter_payload(
+            payload,
+            BikeParameter.BATTERY1_CURRENT_LEVEL,
+            TCXGeneration.TCX2,
+            0x33,
+        )
+        remaining = extract_group_parameter_payload(
+            payload,
+            BikeParameter.BATTERY1_REMAINING_CAPACITY,
+            TCXGeneration.TCX2,
+            0x33,
+        )
+
+        assert current == bytes.fromhex("05fc0a")
+        assert remaining == bytes.fromhex("05fff401")
+
+    def test_leaves_individual_field_response_unchanged(self):
+        payload = bytes.fromhex("05fc0a")
+
+        assert (
+            extract_group_parameter_payload(
+                payload,
+                BikeParameter.BATTERY1_CURRENT_LEVEL,
+                TCXGeneration.TCX2,
+                0x33,
+            )
+            == payload
+        )
+
+    def test_rejects_short_group_response(self):
+        with pytest.raises(ValueError, match="too short"):
+            extract_group_parameter_payload(
+                bytes.fromhex("080000"),
+                BikeParameter.SYSTEM_GRADIENT,
+                TCXGeneration.TCX2,
+                0x33,
+            )
 
 
 class TestParamVsWireIdDistinction:

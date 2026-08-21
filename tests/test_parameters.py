@@ -78,6 +78,27 @@ class TestTCXFieldDefinitions:
         assert fd is not None
         assert fd.convert(3789214) == pytest.approx(3789.214)
 
+    def test_grouped_battery_scaling(self):
+        voltage = get_tcx_field(BikeParameter.BATTERY1_VOLTAGE_LEVEL)
+        current = get_tcx_field(BikeParameter.BATTERY1_CURRENT_LEVEL)
+        assert voltage is not None and current is not None
+        assert voltage.data_size == 1
+        assert voltage.convert(175) == pytest.approx(55.0)
+        assert current.data_size == 1
+        assert current.convert(10) == pytest.approx(2.0)
+
+    def test_grouped_system_scaling(self):
+        altitude_gain = get_tcx_field(BikeParameter.SYSTEM_ALT_GAIN)
+        consumption = get_tcx_field(BikeParameter.SYSTEM_CONSUMPTION)
+        range_long = get_tcx_field(BikeParameter.SYSTEM_RANGE_LONG)
+        assert altitude_gain is not None
+        assert consumption is not None
+        assert range_long is not None
+        assert altitude_gain.data_size == 3
+        assert altitude_gain.convert(1234) == pytest.approx(123.4)
+        assert consumption.convert(123) == pytest.approx(12.3)
+        assert range_long.convert(42) == 42
+
     def test_unknown_param_returns_none(self):
         assert get_tcx_field(9999) is None
 
