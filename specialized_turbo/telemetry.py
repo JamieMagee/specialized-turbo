@@ -78,9 +78,11 @@ class TelemetryMonitor:
         connection: SpecializedConnection,
         *,
         revision_accessor: Callable[[], ProtocolRevision | None] | None = None,
+        notification_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._conn = connection
         self._revision_accessor = revision_accessor
+        self._notification_loop = notification_loop
         self._snapshot = TelemetrySnapshot()
         self._running = False
         self._queue: asyncio.Queue[ParsedMessage | None] = asyncio.Queue()
@@ -134,19 +136,35 @@ class TelemetryMonitor:
         )
         return None
 
-    async def start(self) -> None:
+    async def start(self, *, prime: bool = True) -> None:
         """Subscribe to bike notifications and begin decoding."""
         if self._running:
             return
         self._running = True
         try:
-            await self._conn.subscribe_notifications(self._notification_handler)
-            await self.poll()
+            await self._conn.subscribe_notifications(self._notification_callback)
+            if prime:
+                await self.poll()
         except Exception:
             self._running = False
             await self._conn.unsubscribe_notifications()
             raise
         logger.info("TelemetryMonitor started")
+
+    def _notification_callback(
+        self,
+        characteristic: BleakGATTCharacteristic,
+        data: bytearray,
+    ) -> None:
+        """Dispatch a Bleak callback onto the configured event loop."""
+        if self._notification_loop is None:
+            self._notification_handler(characteristic, data)
+            return
+        self._notification_loop.call_soon_threadsafe(
+            self._notification_handler,
+            characteristic,
+            bytearray(data),
+        )
 
     async def poll(self) -> bool:
         """Poll the active connection and update the current snapshot."""

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import ClassVar, Self, cast
+from unittest.mock import MagicMock
 
 import pytest
 from bleak.backends.characteristic import BleakGATTCharacteristic
@@ -296,6 +297,35 @@ class TestUnifiedPolling:
         await monitor.start()
 
         assert conn.requested_params == list(TCX_POLL_PARAMS)
+        await monitor.stop()
+
+    async def test_start_can_skip_initial_poll(self) -> None:
+        conn = _FakeRevisionAwareConnection(session=TCXSession(), revision=_revision())
+        monitor = TelemetryMonitor(cast(SpecializedConnection, conn))
+
+        await monitor.start(prime=False)
+
+        assert conn.poll_calls == 0
+        await monitor.stop()
+
+
+class TestNotificationDispatch:
+    async def test_dispatches_notification_to_configured_loop(self) -> None:
+        conn = _FakeConnection(session=TCU1Session())
+        loop = MagicMock()
+        monitor = TelemetryMonitor(
+            cast(SpecializedConnection, conn),
+            notification_loop=loop,
+        )
+        await monitor.start(prime=False)
+
+        packet = bytes([Sender.BATTERY, BatteryChannel.CHARGE_PERCENT, 55])
+        conn.notify(packet)
+
+        loop.call_soon_threadsafe.assert_called_once()
+        callback, characteristic, data = loop.call_soon_threadsafe.call_args.args
+        callback(characteristic, data)
+        assert monitor.snapshot.battery.charge_pct == 55
         await monitor.stop()
 
     async def test_priming_stops_on_first_timeout(self) -> None:
