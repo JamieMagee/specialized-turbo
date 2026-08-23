@@ -19,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from bleak.backends.characteristic import BleakGATTCharacteristic
@@ -32,6 +32,8 @@ from specialized_turbo.bike_info import BikeInfo, parse_bike_info
 from specialized_turbo.connection import (
     SpecializedConnection,
     UnsupportedTCXOperationError,
+    detect_ble_profile_from_services,
+    is_tcx1_service_structure,
     scan_for_bikes,
 )
 from specialized_turbo.encryption import PRODUCTION_WRAPPING_KEY
@@ -44,7 +46,12 @@ from specialized_turbo.key_provider import EncryptionKeyRequiredError
 from specialized_turbo.keystore.models import BikeEncryptionKey
 from specialized_turbo.parameters import BikeParameter, encode_parameter_id
 from specialized_turbo.protocol import (
+    CHAR_NOTIFY,
+    CHAR_NOTIFY_TCU1,
+    CHAR_REQUEST_READ,
+    CHAR_REQUEST_WRITE,
     NORDIC_COMPANY_ID,
+    SERVICE_DATA_WRITE,
     BikeAdvertisement,
     BLEProfile,
     BLEServiceID,
@@ -183,6 +190,7 @@ class _FakeBleakClient:
         # Characteristic UUIDs for which start_notify() should raise --
         # simulates a post-identification subscribe_for_realtime() failure.
         self.fail_start_notify_for: set[str] = set()
+        self.services = _FakeServices()
 
     async def connect(self) -> None:
         self.is_connected = True
@@ -245,6 +253,36 @@ class _FakeBleakClient:
         callback(characteristic, bytearray(data))
 
 
+class _FakeServices:
+    def __init__(
+        self,
+        *,
+        generation: BLEProfile | None = None,
+        tcx1: bool = False,
+    ) -> None:
+        self._generation = generation
+        self._tcx1 = tcx1
+
+    def get_characteristic(self, uuid: str) -> object | None:
+        if self._generation is None:
+            return None
+        expected = (
+            CHAR_NOTIFY_TCU1 if self._generation == BLEProfile.TCU1 else CHAR_NOTIFY
+        )
+        if uuid == expected:
+            return object()
+        if self._generation == BLEProfile.TCX and uuid == CHAR_REQUEST_READ:
+            properties = ["read"] if self._tcx1 else ["read", "notify"]
+            return SimpleNamespace(properties=properties)
+        return None
+
+    def get_service(self, uuid: str) -> object | None:
+        if self._generation != BLEProfile.TCX or uuid != SERVICE_DATA_WRITE:
+            return None
+        count = 1 if self._tcx1 else 2
+        return SimpleNamespace(characteristics=[object()] * count)
+
+
 @pytest.fixture
 def fake_bleak(monkeypatch: pytest.MonkeyPatch) -> type[_FakeBleakClient]:
     monkeypatch.setattr(connection_module, "BleakClient", _FakeBleakClient)
@@ -258,6 +296,75 @@ def _connection(**kwargs: Any) -> SpecializedConnection:
         key=BikeEncryptionKey(raw=KEY_RAW),
         **kwargs,
     )
+
+
+def test_detects_connected_uuid_family_and_tcx1_structure() -> None:
+    tcx1_services = cast(Any, _FakeServices(generation=BLEProfile.TCX, tcx1=True))
+    tcx2_services = cast(Any, _FakeServices(generation=BLEProfile.TCX))
+    tcu1_services = cast(Any, _FakeServices(generation=BLEProfile.TCU1))
+
+    assert detect_ble_profile_from_services(tcx1_services) is BLEProfile.TCX
+    assert detect_ble_profile_from_services(tcu1_services) is BLEProfile.TCU1
+    assert is_tcx1_service_structure(tcx1_services) is True
+    assert is_tcx1_service_structure(tcx2_services) is False
+
+    class _PropertiesOnlyServices(_FakeServices):
+        def get_service(self, uuid: str) -> None:
+            del uuid
+
+    properties_only = _PropertiesOnlyServices(
+        generation=BLEProfile.TCX,
+        tcx1=True,
+    )
+    assert is_tcx1_service_structure(cast(Any, properties_only)) is True
+
+
+@pytest.mark.asyncio
+async def test_tcx1_uses_turbohmi_write_read_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeTCX1BleakClient(_FakeBleakClient):
+        def __init__(
+            self,
+            address: object,
+            *,
+            disconnected_callback: Callable[[Any], None] | None = None,
+        ) -> None:
+            super().__init__(address, disconnected_callback=disconnected_callback)
+            self.services = _FakeServices(generation=BLEProfile.TCX, tcx1=True)
+
+    monkeypatch.setattr(connection_module, "BleakClient", _FakeTCX1BleakClient)
+    connection = SpecializedConnection(
+        "AA:BB:CC:DD:EE:FF",
+        bike_info=BikeInfo(
+            name="WSBC025079419R",
+            bike_name="WSBC025079419R",
+            is_bike=True,
+            complete=False,
+            ble_profile=BLEProfile.TCX,
+        ),
+    )
+
+    await connection.connect()
+    client = _FakeTCX1BleakClient.instance
+    assert client is not None
+    assert isinstance(connection.session, TCU1Session)
+    assert connection.active_revision is None
+
+    callback = MagicMock()
+    await connection.subscribe_notifications(callback)
+    assert client.subscriptions == [CHAR_NOTIFY]
+
+    message = await connection.request_value(0x00, 0x0C)
+    assert message.converted_value == 49
+    assert client.writes[-1] == (
+        CHAR_REQUEST_WRITE,
+        bytes.fromhex("000c"),
+        True,
+    )
+    assert client.reads[-1] == CHAR_REQUEST_READ
+
+    await connection.disconnect()
 
 
 # ---------------------------------------------------------------------------

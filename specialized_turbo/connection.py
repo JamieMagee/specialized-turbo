@@ -15,6 +15,7 @@ from typing import Self
 from bleak import BleakClient, BleakError, BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
+from bleak.backends.service import BleakGATTServiceCollection
 
 from .bike_info import BikeInfo, parse_bike_info
 from .identification import (
@@ -32,7 +33,10 @@ from .key_provider import (
 from .keystore.models import BikeEncryptionKey
 from .parameters import BikeParameter
 from .protocol import (
+    CHAR_NOTIFY,
+    CHAR_NOTIFY_TCU1,
     NORDIC_COMPANY_ID,
+    SERVICE_DATA_WRITE,
     BikeAdvertisement,
     BLEProfile,
     ParsedMessage,
@@ -58,8 +62,39 @@ from .wire_profiles import ProtocolRevision
 logger = logging.getLogger(__name__)
 
 
+def detect_ble_profile_from_services(
+    services: BleakGATTServiceCollection,
+) -> BLEProfile | None:
+    """Detect the UUID family exposed by a connected bike."""
+    has_tcu1 = services.get_characteristic(CHAR_NOTIFY_TCU1) is not None
+    has_tcx = services.get_characteristic(CHAR_NOTIFY) is not None
+    if has_tcu1 and not has_tcx:
+        return BLEProfile.TCU1
+    if has_tcx and not has_tcu1:
+        return BLEProfile.TCX
+    return None
+
+
+def is_tcx1_service_structure(services: BleakGATTServiceCollection) -> bool:
+    """Return whether connected TURBOHMI services use the legacy TCX1 layout.
+
+    The official app distinguishes TCX1 from TCX2+ by service 2: TCX1 has one
+    write characteristic, while TCX2+ has separate write and notify
+    characteristics.
+    """
+    service = services.get_service(SERVICE_DATA_WRITE)
+    if service is not None and len(service.characteristics) == 1:
+        return True
+
+    request_read = services.get_characteristic(get_char_request_read(BLEProfile.TCX))
+    if request_read is None:
+        return False
+    properties = {property_name.lower() for property_name in request_read.properties}
+    return "read" in properties and properties.isdisjoint({"notify", "indicate"})
+
+
 class UnsupportedTCXOperationError(RuntimeError):
-    """A TCU1 convenience write has no verified TCX2+ ``BikeParameter`` equivalent.
+    """A legacy convenience write has no verified TCX2+ equivalent.
 
     Raised instead of guessing a wire id for an operation (e.g. shuttle)
     that has no confirmed mapping on the TCX2+ protocol, so a TCX write can
@@ -270,19 +305,19 @@ class SpecializedConnection:
             6-digit pairing PIN displayed on the bike's TCU.  Required for
             pairing on first connection.
         generation :
-            Protocol generation (TCU1 or TCX).  Determines which
+            BLE UUID family (TCU1 or TCX). Determines which
             GATT UUIDs to use.  Defaults to TCX.
         bike_info :
             The pre-connect advertisement parse (see
             :func:`specialized_turbo.bike_info.parse_bike_info`).  Required
-            for a TCX connection: it must be ``complete`` and carry a
+            for a TCX2+ connection: it must be ``complete`` and carry a
             ``tcx_generation`` so the official identification handshake
             (:class:`~specialized_turbo.identification.TCXIdentification`)
-            can select the right wire-id map.  Ignored for TCU1.
+            can select the right wire-id map. Ignored for TCU1 and TCX1.
         key :
             The bike's AES-128 encryption key, fetched out-of-band from the
             account keystore (never available over BLE). Required for a
-            TCX connection, since every complete TCX ``BikeInfo`` implies
+            TCX2+ connection, since every complete TCX2+ ``BikeInfo`` implies
             AES-CTR encryption. Never logged -- see
             :class:`~specialized_turbo.keystore.models.BikeEncryptionKey`.
         disconnect_callback :
@@ -314,6 +349,7 @@ class SpecializedConnection:
         self._char_request_read = ""
         self._char_request_write = ""
         self._char_write = ""
+        self._uses_tcx1 = False
         self._set_generation(generation)
         self._client: BleakClient | None = None
         self._session: ProtocolSession = TCU1Session()
@@ -348,6 +384,7 @@ class SpecializedConnection:
         )
         await self._client.connect()
         logger.info("BLE connected, is_connected=%s", self._client.is_connected)
+        self._update_protocol_from_services()
 
         # Attempt explicit pairing if a PIN was provided
         if self._pin is not None:
@@ -377,7 +414,7 @@ class SpecializedConnection:
                 logger.warning("Pairing raised %s: %s", type(exc).__name__, exc)
 
         # Create protocol session
-        if self._generation == BLEProfile.TCX:
+        if self._uses_modern_tcx:
             transport = TCXNotificationTransport(
                 self._client,
                 trace_callback=self._trace_callback,
@@ -417,10 +454,30 @@ class SpecializedConnection:
 
     def _set_generation(self, generation: BLEProfile) -> None:
         self._generation = generation
+        if generation != BLEProfile.TCX:
+            self._uses_tcx1 = False
         self._char_notify = get_char_notify(generation)
         self._char_request_read = get_char_request_read(generation)
         self._char_request_write = get_char_request_write(generation)
         self._char_write = get_char_write(generation)
+
+    @property
+    def _uses_modern_tcx(self) -> bool:
+        return self._generation == BLEProfile.TCX and not self._uses_tcx1
+
+    def _update_protocol_from_services(self) -> None:
+        """Resolve the UUID family and TCX1/TCX2+ transport after connection."""
+        if self._client is None:
+            return
+        generation = detect_ble_profile_from_services(self._client.services)
+        if generation is not None:
+            self._set_generation(generation)
+        self._uses_tcx1 = (
+            self._generation == BLEProfile.TCX
+            and is_tcx1_service_structure(self._client.services)
+        )
+        if self._uses_tcx1:
+            logger.info("Detected legacy TCX1 write-read service structure")
 
     async def _prepare_tcx_context(self) -> None:
         if self._bike_info is None and self._advertisement is not None:
@@ -565,7 +622,7 @@ class SpecializedConnection:
         structural protocol) to know which wire-id map is in effect -- see
         :mod:`specialized_turbo.wire_profiles`.
 
-        Read-only: ``None`` for a TCU1 connection, or before a TCX
+        Read-only: ``None`` for TCU1/TCX1, or before a TCX2+
         identification handshake has completed.
         """
         return self._protocol_revision
@@ -585,8 +642,8 @@ class SpecializedConnection:
     def identification_result(self) -> IdentificationResult | None:
         """The full result of the TCX identification handshake, if any.
 
-        Read-only: ``None`` for a TCU1 connection, or before identification
-        has completed.
+        Read-only: ``None`` for TCU1/TCX1, or before identification has
+        completed.
         """
         return self._identification_result
 
@@ -600,7 +657,7 @@ class SpecializedConnection:
         if self._client is None:
             raise RuntimeError("Not connected")
 
-        if self._generation == BLEProfile.TCX:
+        if self._uses_modern_tcx:
             transport = self._tcx_transport
             if transport is None:
                 raise RuntimeError("TCX transport is not initialized")
@@ -620,7 +677,7 @@ class SpecializedConnection:
     async def unsubscribe_notifications(self) -> None:
         """Stop receiving telemetry notifications."""
         if self._client and self._notification_started:
-            if self._generation == BLEProfile.TCX:
+            if self._uses_modern_tcx:
                 transport = self._tcx_transport
                 if transport is not None:
                     try:
@@ -647,7 +704,11 @@ class SpecializedConnection:
             raise RuntimeError("Not connected")
         request_bytes = build_request(sender, channel)
         logger.debug("Request-write: %s", request_bytes.hex())
-        await self._client.write_gatt_char(self._char_request_write, request_bytes)
+        await self._client.write_gatt_char(
+            self._char_request_write,
+            request_bytes,
+            response=True if self._uses_tcx1 else None,
+        )
 
         await asyncio.sleep(0.1)
 
@@ -781,7 +842,7 @@ class SpecializedConnection:
         """
         if self._client is None:
             raise RuntimeError("Not connected")
-        if self._generation == BLEProfile.TCX:
+        if self._uses_modern_tcx:
             if self._tcx_transport is None:
                 raise RuntimeError("TCX transport is not initialized")
             warnings.warn(
@@ -836,10 +897,10 @@ class SpecializedConnection:
         """Set the assist level (0=OFF, 1=ECO, 2=TRAIL, 3=TURBO).
 
         On TCX2+ this maps to ``MOTOR_ACTIVE_TRAVEL_MODE`` through the
-        negotiated protocol revision; on TCU1 it keeps the legacy
+        negotiated protocol revision; on TCU1/TCX1 it keeps the legacy
         sender/channel write unchanged.
         """
-        if self._generation == BLEProfile.TCX:
+        if self._uses_modern_tcx:
             await self.write_tcx_parameter(
                 BikeParameter.MOTOR_ACTIVE_TRAVEL_MODE, bytes([level])
             )
@@ -855,10 +916,10 @@ class SpecializedConnection:
         """Set assist percentage for a level (level_index: 0=ECO, 1=TRAIL, 2=TURBO; value: 0-100).
 
         On TCX2+ this maps to the matching ``MOTOR_PROFILE_SCALING_*_SETTING``
-        parameter through the negotiated protocol revision; on TCU1 it keeps
-        the legacy sender/channel write unchanged.
+        parameter through the negotiated protocol revision; on TCU1/TCX1 it
+        keeps the legacy sender/channel write unchanged.
         """
-        if self._generation == BLEProfile.TCX:
+        if self._uses_modern_tcx:
             try:
                 param = self._TCX_PROFILE_SCALING[level_index]
             except IndexError:
@@ -880,10 +941,11 @@ class SpecializedConnection:
 
         On TCX2+ this maps to ``MOTOR_ACCELERATION_RESPONSE`` through the
         negotiated protocol revision (same ``percent * 60 + 3000`` wire
-        encoding); on TCU1 it keeps the legacy sender/channel write unchanged.
+        encoding); on TCU1/TCX1 it keeps the legacy sender/channel write
+        unchanged.
         """
         raw = int(percent * 60 + 3000)
-        if self._generation == BLEProfile.TCX:
+        if self._uses_modern_tcx:
             await self.write_tcx_parameter(
                 BikeParameter.MOTOR_ACCELERATION_RESPONSE, raw.to_bytes(2, "little")
             )
@@ -898,15 +960,15 @@ class SpecializedConnection:
     async def set_shuttle(self, value: int) -> None:
         """Set shuttle value (0-100).
 
-        TCU1 only: there is no verified TCX2+ ``BikeParameter`` equivalent
-        for the TCU1 shuttle write, so this raises
+        TCU1/TCX1 only: there is no verified TCX2+ ``BikeParameter`` equivalent
+        for the legacy shuttle write, so this raises
         :class:`UnsupportedTCXOperationError` on a TCX connection rather than
         guessing a wire id.
         """
-        if self._generation == BLEProfile.TCX:
+        if self._uses_modern_tcx:
             raise UnsupportedTCXOperationError(
                 "set_shuttle has no verified TCX2+ BikeParameter equivalent; "
-                "it is supported on TCU1 only"
+                "it is supported on TCU1 and TCX1 only"
             )
 
         from .protocol import build_write_command

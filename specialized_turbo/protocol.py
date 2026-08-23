@@ -4,12 +4,12 @@ Specialized Turbo BLE protocol.
 UUIDs, message format, enums, and parsing. Ported from the
 Sepp62/LevoEsp32Ble C++ project (MIT).
 
-Supports two protocol generations:
-- TCX ("TURBOHMI2017"): Vado/Levo/Creo 2019+, Nordic manufacturer ID
+Supports two BLE UUID families:
+- TCX ("TURBOHMI2017"): legacy TCX1 plus TCX2/TCX3/TCX4
 - TCU1 ("GIGATRONIK"): Levo 2018, Simplo manufacturer ID
 
-Both generations share the same message format and field definitions;
-only the BLE UUIDs and advertisement data differ.
+TCU1 and TCX1 use legacy sender/channel messages. TCX2+ uses framed
+parameter messages.
 """
 
 from __future__ import annotations
@@ -26,10 +26,10 @@ from typing import NamedTuple
 
 
 class BLEProfile(StrEnum):
-    """BLE protocol generation for Specialized Turbo bikes."""
+    """BLE GATT UUID family for Specialized Turbo bikes."""
 
     TCU1 = "tcu1"  # 2018 Levo (Gigatronik TCU, Simplo mfr ID)
-    TCX = "tcx"  # 2019+ Vado/Levo/Creo (TURBOHMI2017, Nordic mfr ID)
+    TCX = "tcx"  # TCX1 and newer (TURBOHMI2017 UUID family)
 
 
 class ProtocolEncryptionMethod(IntEnum):

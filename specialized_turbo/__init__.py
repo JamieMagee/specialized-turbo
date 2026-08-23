@@ -100,10 +100,12 @@ from .models import (
 from .connection import (
     SpecializedConnection as SpecializedConnection,
     UnsupportedTCXOperationError as UnsupportedTCXOperationError,
+    detect_ble_profile_from_services as detect_ble_profile_from_services,
     scan_for_bikes as scan_for_bikes,
     find_bike_by_address as find_bike_by_address,
     find_advertisement_by_address as find_advertisement_by_address,
     find_bike_advertisement_by_address as find_bike_advertisement_by_address,
+    is_tcx1_service_structure as is_tcx1_service_structure,
 )
 from .bike_info import (
     BikeInfo as BikeInfo,
@@ -269,6 +271,8 @@ __all__ = [
     # Connection
     "SpecializedConnection",
     "UnsupportedTCXOperationError",
+    "detect_ble_profile_from_services",
+    "is_tcx1_service_structure",
     "scan_for_bikes",
     "find_bike_by_address",
     "find_advertisement_by_address",
@@ -356,4 +360,4 @@ __all__ = [
     "identify_tcx",
 ]
 
-__version__ = "0.7.8"
+__version__ = "0.7.9"

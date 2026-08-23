@@ -2,11 +2,12 @@
 
 Specialized Turbo e-bikes (Vado, Levo, Creo) expose telemetry and configuration over Bluetooth Low Energy. The bike acts as the GATT server; your phone or computer connects as the client.
 
-There are four protocol generations in the wild. They all use the same BLE GATT service and characteristic UUIDs, but differ in how they format messages on the wire:
+There are two legacy request-read variants and three TCX2+ generations:
 
 | Generation | Internal name | Message format |
 | --- | --- | --- |
 | TCU1 | `ProtocolSessionTCU1` | `[sender][channel][data]`, no CRC, no encryption |
+| TCX1 | `BluetoothProtocolTCX1` | Same messages as TCU1, using the TURBOHMI UUID family |
 | TCX2 | `ProtocolSessionTCX2` | 2-byte parameter ID + CRC-16 + optional AES-128-CTR |
 | TCX3 | `ProtocolSessionTCX3` | Same wire format as TCX2, different parameter set |
 | TCX4 | `ProtocolSessionTCX4` | Same wire format as TCX2/TCX3, different parameter set |
@@ -14,7 +15,7 @@ There are four protocol generations in the wild. They all use the same BLE GATT 
 Three communication patterns exist:
 
 1. **Notifications** -- the bike pushes telemetry as values change
-2. **Queries** -- TCU1 uses request-read; TCX uses write-without-response + notify
+2. **Queries** -- TCU1/TCX1 use request-read; TCX2+ uses write-without-response + notify
 3. **Write** -- the client changes settings (assist level, etc.)
 
 ---
@@ -90,7 +91,7 @@ Telling TCX2 apart from TCX3 or TCX4 requires the identification handshake
 
 TCU1 and TCX bikes share the same short IDs for services and characteristics, but with different 128-bit UUID bases.
 
-### TURBOHMI UUID base (TCX2/TCX3/TCX4)
+### TURBOHMI UUID base (TCX1/TCX2/TCX3/TCX4)
 
 ```
 000000xx-3731-3032-494d-484f42525554
@@ -120,6 +121,12 @@ TCX never performs a GATT read during normal operation.
 
 Expand short IDs with the appropriate UUID base. For example, characteristic `0x0013` on a TCX2 bike is `00000013-3731-3032-494d-484f42525554`.
 
+TCX1 uses a different characteristic layout within the TURBOHMI services.
+Service 2 has one write characteristic instead of separate write and notify
+characteristics. Service 1 characteristic `0x0011` is read-only, so a query
+writes `[sender, channel]` to `0x0021` and then reads `0x0011`. Live telemetry
+still arrives as notifications on service 3 characteristic `0x0013`.
+
 ---
 
 ## Authentication
@@ -142,15 +149,16 @@ Some newer bikes use **numeric comparison** instead of passkey entry. The bike a
 
 ---
 
-## TCU1 message format
+## TCU1 and TCX1 message format
 
-TCU1 uses a straightforward byte layout with no framing:
+TCU1 and TCX1 use a straightforward byte layout with no framing:
 
 ```
 [sender: 1 byte] [channel: 1 byte] [data: 1-4 bytes, little-endian]
 ```
 
-TCU1 notifications are padded with `0xFF` to 20 bytes. The parser strips trailing `0xFF`.
+Legacy notifications can be padded with `0xFF` to 20 bytes. The parser strips
+trailing `0xFF`.
 
 ### Senders
 
@@ -504,23 +512,24 @@ contains parameter records whose values use the normal `BikeParameter`
 metadata. The exact firmware-dependent record set and packet payload offset
 still need confirmation from an untruncated live capture.
 
-The official Android app performs no GATT reads for TCX. A GATT read produces
-an `f8 ff` NAK response on affected bikes.
+The official Android app performs no GATT reads for TCX2+. A GATT read produces
+an `f8 ff` NAK response on affected TCX2+ bikes.
 
-### TCU1 request-read
+### TCU1/TCX1 request-read
 
 1. Write `[sender, channel]` to characteristic `0x0021` (service `0x0001`).
 2. Read the response from characteristic `0x0011`.
 3. Verify the response starts with the requested sender and channel.
 
-The Sepp62 reference code unsubscribes from notifications before doing TCU1
+The Sepp62 reference code unsubscribes from notifications before doing legacy
 request-reads since they can interfere on the same connection.
 
-### Write commands (TCU1)
+### Write commands (TCU1/TCX1)
 
-Write command bytes using the TCU1 command endpoint. TCX2+ parameter writes
-use service 3 characteristic `0x0023`, write-without-response, and the same
-CRC/encryption pipeline as queries.
+Write legacy command bytes using the service 2 write characteristic for the
+active UUID family. TCX2+ parameter writes use service 3 characteristic
+`0x0023`, write-without-response, and the same CRC/encryption pipeline as
+queries.
 
 Set assist level:
 
@@ -562,9 +571,13 @@ value: 0-100
 
 ## Quirks
 
-1. **Message `0x02 0x27`**: undocumented, but when it arrives on TCU1, notifications pause briefly. The Sepp62 reference uses this window to sneak in a request-read for battery capacity.
+1. **Message `0x02 0x27`**: undocumented, but when it arrives on a legacy
+   session, notifications pause briefly. The Sepp62 reference uses this window
+   to sneak in a request-read for battery capacity.
 
-2. **Request-read interference**: on TCU1, do request-reads while notifications are paused to avoid garbled responses. TCX does not use GATT reads.
+2. **Request-read interference**: on TCU1/TCX1, do request-reads while
+   notifications are paused to avoid garbled responses. TCX2+ does not use
+   GATT reads.
 
 3. **Battery voltage/current formulas**: the conversions (`raw/5+20` for
    voltage, `raw/5` for current) were first documented for TCU1 and are also

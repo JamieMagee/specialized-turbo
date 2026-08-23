@@ -201,16 +201,20 @@ TCX2+ bikes have additional fields (range, altitude, gradient, calories, system 
 
 ## Protocol support
 
-Four protocol generations exist:
+Five protocol variants exist:
 
 | Protocol | Message format | Encryption |
 | --- | --- | --- |
 | TCU1 | `[sender][channel][data]` | None |
+| TCX1 | Same as TCU1, using TURBOHMI GATT UUIDs | None |
 | TCX2 | 2-byte parameter ID + payload + clear CRC-16 | Optional AES-128-CTR |
 | TCX3 | Same as TCX2 | Optional AES-128-CTR |
 | TCX4 | Same as TCX2 | Optional AES-128-CTR |
 
-TCX2/3/4 share one wire format and differ only in which parameters the bike supports. The `BLEProfile` enum (`TCU1` / `TCX`) controls which GATT UUIDs to use.
+TCX1 shares the TURBOHMI UUID family with TCX2/3/4 but uses legacy
+write-then-read queries. The connected service structure distinguishes it from
+TCX2+. The `BLEProfile` enum (`TCU1` / `TCX`) controls which GATT UUID family
+to use.
 
 For encrypted bikes, only packet bytes 2–17 are encrypted. The parameter ID
 and CRC remain clear. The wrapped per-bike key comes from Specialized's cloud,
