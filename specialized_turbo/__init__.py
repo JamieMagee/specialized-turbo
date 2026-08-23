@@ -16,7 +16,7 @@ Quick start (TCX2+ bikes)::
         # and ``key`` from the Specialized account keystore -- a TCX2+ bike
         # cannot be identified without both.
         async with SpecializedConnection(
-            "DC:DD:BB:4A:D6:55", pin="946166", bike_info=info, key=key
+            "DC:DD:BB:4A:D6:55", bike_info=info, key=key
         ) as conn:
             monitor = TelemetryMonitor(conn)
             await monitor.start()
@@ -98,6 +98,7 @@ from .models import (
     TelemetrySnapshot as TelemetrySnapshot,
 )
 from .connection import (
+    BleakClientFactory as BleakClientFactory,
     SpecializedConnection as SpecializedConnection,
     UnsupportedTCXOperationError as UnsupportedTCXOperationError,
     detect_ble_profile_from_services as detect_ble_profile_from_services,
@@ -270,6 +271,7 @@ __all__ = [
     "TelemetrySnapshot",
     # Connection
     "SpecializedConnection",
+    "BleakClientFactory",
     "UnsupportedTCXOperationError",
     "detect_ble_profile_from_services",
     "is_tcx1_service_structure",
@@ -360,4 +362,4 @@ __all__ = [
     "identify_tcx",
 ]
 
-__version__ = "0.7.9"
+__version__ = "0.8.0"

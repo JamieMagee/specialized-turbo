@@ -44,6 +44,7 @@ from specialized_turbo.identification import (
 )
 from specialized_turbo.key_provider import EncryptionKeyRequiredError
 from specialized_turbo.keystore.models import BikeEncryptionKey
+from specialized_turbo.models import TelemetrySnapshot
 from specialized_turbo.parameters import BikeParameter, encode_parameter_id
 from specialized_turbo.protocol import (
     CHAR_NOTIFY,
@@ -183,6 +184,7 @@ class _FakeBleakClient:
         self.subscriptions: list[str] = []
         self.writes: list[tuple[str, bytes, bool | None]] = []
         self.reads: list[str] = []
+        self.pair_calls: list[int] = []
         self.bike = _healthy_bike()
         # If set, disconnect (and stop answering) as soon as this wire id
         # is written -- simulates a mid-handshake link drop.
@@ -199,7 +201,7 @@ class _FakeBleakClient:
         self.is_connected = False
 
     async def pair(self, *, protection_level: int) -> None:
-        assert protection_level == 2
+        self.pair_calls.append(protection_level)
 
     async def start_notify(
         self,
@@ -350,6 +352,7 @@ async def test_tcx1_uses_turbohmi_write_read_transport(
     assert client is not None
     assert isinstance(connection.session, TCU1Session)
     assert connection.active_revision is None
+    assert client.pair_calls == [2]
 
     callback = MagicMock()
     await connection.subscribe_notifications(callback)
@@ -365,6 +368,40 @@ async def test_tcx1_uses_turbohmi_write_read_transport(
     assert client.reads[-1] == CHAR_REQUEST_READ
 
     await connection.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_injected_client_factory_is_used() -> None:
+    client = _FakeBleakClient("AA:BB:CC:DD:EE:FF")
+    client.is_connected = True
+    calls: list[object] = []
+
+    async def factory(
+        address: str | BLEDevice,
+        disconnected_callback: Callable[[Any], None] | None,
+    ) -> _FakeBleakClient:
+        calls.extend((address, disconnected_callback))
+        client.disconnected_callback = disconnected_callback
+        return client
+
+    connection = _connection(client_factory=factory)
+    await connection.connect()
+
+    assert calls[0] == "AA:BB:CC:DD:EE:FF"
+    assert callable(calls[1])
+    assert connection.is_connected
+    await connection.disconnect()
+
+
+def test_pin_is_deprecated_and_not_stored() -> None:
+    with pytest.warns(DeprecationWarning, match="pin is deprecated"):
+        connection = SpecializedConnection(
+            "AA:BB:CC:DD:EE:FF",
+            pin="123456",
+            generation=BLEProfile.TCU1,
+        )
+
+    assert not hasattr(connection, "_pin")
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +421,7 @@ async def test_tcx_connect_identifies_without_gatt_reads(
     client = fake_bleak.instance
     assert client is not None
     assert client.reads == []
+    assert client.pair_calls == [2]
 
     expected_subscriptions = [
         get_service_characteristics(BLEProfile.TCX, service_id).notify
@@ -898,6 +936,7 @@ async def test_tcu1_request_read_is_unchanged(
     assert message.converted_value == 49
     assert len(client.reads) == 1
     assert client.writes[-1][1] == bytes.fromhex("000c")
+    assert client.pair_calls == []
 
     await connection.disconnect()
 
@@ -923,6 +962,35 @@ async def test_tcu1_convenience_writes_unchanged(
 
     await connection.set_shuttle(50)  # TCU1 supports shuttle
     assert client.writes[-1][1] == bytes([0x01, 0x15, 50])
+    assert client.pair_calls == []
+
+    await connection.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_auto_pair_can_be_disabled(
+    fake_bleak: type[_FakeBleakClient],
+) -> None:
+    connection = _connection(auto_pair=False)
+
+    await connection.connect()
+
+    client = fake_bleak.instance
+    assert client is not None
+    assert client.pair_calls == []
+    await connection.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_poll_telemetry_routes_through_active_protocol(
+    fake_bleak: type[_FakeBleakClient],
+) -> None:
+    connection = _connection()
+    await connection.connect()
+    snapshot = TelemetrySnapshot()
+
+    assert await connection.poll_telemetry(snapshot) is True
+    assert snapshot.battery.charge_pct == 49
 
     await connection.disconnect()
 

@@ -1,17 +1,17 @@
 """
-Unit tests for ``TelemetryMonitor``'s profile-aware TCX notification
-handling and priming.
+Unit tests for ``TelemetryMonitor``'s profile-aware notification handling and
+unified connection polling.
 
 A duck-typed fake stands in for ``SpecializedConnection``. Two fake
 connection variants exercise both sides of
 ``TelemetryMonitor._active_revision``'s narrow, type-validated lookup:
 
 - one with no ``active_revision`` attribute at all -- notifications fall
-  back to the legacy, non-profile-aware parse and priming is skipped.
+  back to the legacy, non-profile-aware parse and polling is skipped.
 - one that implements :class:`~specialized_turbo.telemetry
   .RevisionAwareConnection` (as the real ``SpecializedConnection`` now does)
-  -- notifications are parsed profile-aware and priming addresses each poll
-  parameter through the revision-aware ``request_tcx_parameter``.
+  -- notifications are parsed profile-aware and ``poll_telemetry`` updates the
+  monitor snapshot.
 
 The fake's ``request_tcx_value`` deliberately raises: priming (and every
 other live path) must never fall back to the deprecated raw enum-id call.
@@ -108,10 +108,24 @@ class _FakeRevisionAwareConnection(_FakeConnection):
     """Same as ``_FakeConnection`` but implements ``active_revision``."""
 
     revision: ProtocolRevision | None = None
+    poll_calls: int = 0
 
     @property
     def active_revision(self) -> ProtocolRevision | None:
         return self.revision
+
+    async def poll_telemetry(self, _snapshot: object) -> bool:
+        """Simulate the connection's unified polling path."""
+        self.poll_calls += 1
+        for param in TCX_POLL_PARAMS:
+            if param in self.unmapped:
+                continue
+            self.requested_params.append(param)
+            if self.timeout_after is not None and len(self.requested_params) > (
+                self.timeout_after
+            ):
+                break
+        return bool(self.requested_params)
 
 
 def _revision() -> ProtocolRevision:
@@ -270,19 +284,17 @@ class TestInjectableRevisionAccessor:
 
 
 # ---------------------------------------------------------------------------
-# Initial snapshot priming (requirements 2 & 5): profile-aware, atomic switch
+# Initial snapshot polling through the connection boundary
 # ---------------------------------------------------------------------------
 
 
-class TestPrimeTcxSnapshot:
+class TestUnifiedPolling:
     async def test_primes_every_poll_param_profile_aware(self) -> None:
         conn = _FakeRevisionAwareConnection(session=TCXSession(), revision=_revision())
         monitor = TelemetryMonitor(cast(SpecializedConnection, conn))
 
         await monitor.start()
 
-        # Priming addresses each poll parameter by BikeParameter (resolved to
-        # a wire id inside request_tcx_parameter), never the raw enum id.
         assert conn.requested_params == list(TCX_POLL_PARAMS)
         await monitor.stop()
 
@@ -320,16 +332,15 @@ class TestPrimeTcxSnapshot:
         assert conn.requested_params == []
         await monitor.stop()
 
-    async def test_reports_priming_is_profile_aware_when_revision_known(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_start_invokes_connection_poll(self) -> None:
         conn = _FakeRevisionAwareConnection(session=TCXSession(), revision=_revision())
         monitor = TelemetryMonitor(cast(SpecializedConnection, conn))
 
-        with caplog.at_level("INFO"):
-            await monitor.start()
+        await monitor.start()
 
-        assert any("profile-aware" in r.message for r in caplog.records)
+        assert conn.poll_calls == 1
+        await monitor.poll()
+        assert conn.poll_calls == 2
         await monitor.stop()
 
 

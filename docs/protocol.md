@@ -140,12 +140,14 @@ No authentication. The GATT services are open.
 MITM protection and Secure Connections are required. The pairing flow:
 
 1. Connect to the bike over BLE
-2. Read the notification characteristic (`0x0013`) -- this triggers pairing
-3. The bike's TCU shows a 6-digit PIN (passkey entry)
-4. Enter the PIN to complete pairing
+2. Request authenticated pairing through the active Bluetooth backend
+3. The backend's pairing agent handles passkey entry or numeric comparison
+4. Complete the pairing prompt outside the library
 5. Bonded keys may be reused for subsequent connections
 
-Some newer bikes use **numeric comparison** instead of passkey entry. The bike and the client both display a number and the user confirms they match. Bleak doesn't fully support this yet ([hbldh/bleak#1864](https://github.com/hbldh/bleak/pull/1864)), so on those bikes you need to pair through the OS first.
+Bleak cannot accept a passkey value directly. Some newer bikes use **numeric
+comparison** instead of passkey entry. If the active backend cannot display or
+confirm the required prompt, pair through the operating system first.
 
 ---
 

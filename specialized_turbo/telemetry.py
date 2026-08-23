@@ -17,15 +17,14 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 
 from .bike_info import BikeInfo
 from .connection import SpecializedConnection
-from .coordinator_helpers import TCX_POLL_PARAMS, parse_tcx_wire_payload
+from .coordinator_helpers import parse_tcx_wire_payload
 from .framing import is_realtime_packet
 from .key_provider import EncryptionKeyProvider
 from .keystore.models import BikeEncryptionKey
 from .models import TelemetrySnapshot
 from .protocol import BLEProfile, ParsedMessage, parse_message, parse_tcx_message
 from .session import TCXSession
-from .transport import TCXRequestTimeoutError
-from .wire_profiles import ProtocolRevision, UnmappedParameterError
+from .wire_profiles import ProtocolRevision
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +63,7 @@ class TelemetryMonitor:
 
     Usage::
 
-        async with SpecializedConnection(address, pin=pin) as conn:
+        async with SpecializedConnection(address) as conn:
             monitor = TelemetryMonitor(conn)
             await monitor.start()
 
@@ -142,13 +141,19 @@ class TelemetryMonitor:
         self._running = True
         try:
             await self._conn.subscribe_notifications(self._notification_handler)
-            if isinstance(self._conn.session, TCXSession):
-                await self._prime_tcx_snapshot()
+            await self.poll()
         except Exception:
             self._running = False
             await self._conn.unsubscribe_notifications()
             raise
         logger.info("TelemetryMonitor started")
+
+    async def poll(self) -> bool:
+        """Poll the active connection and update the current snapshot."""
+        poll_telemetry = getattr(self._conn, "poll_telemetry", None)
+        if poll_telemetry is None:
+            return False
+        return await poll_telemetry(self._snapshot)
 
     async def stop(self) -> None:
         """Unsubscribe from notifications."""
@@ -250,56 +255,6 @@ class TelemetryMonitor:
 
         self._queue.put_nowait(msg)
 
-    async def _prime_tcx_snapshot(self) -> None:
-        """Query the initial TCX values through the notification transport.
-
-        Profile-aware: each :data:`TCX_POLL_PARAMS` entry is requested via
-        :meth:`SpecializedConnection.request_tcx_parameter`, which resolves
-        the app-level ``BikeParameter`` to a wire command id through the
-        negotiated :class:`ProtocolRevision` -- the same revision the live
-        ``_notification_handler`` uses to decode responses. The request and
-        notification sides therefore switch together: when a revision is
-        available both are profile-aware; when it is not, priming is skipped
-        entirely (the deprecated raw enum-ID path is never used) and the
-        snapshot is populated by live notifications alone.
-
-        Per-parameter failures are contained: a parameter with no wire id
-        for this revision is skipped; a request timeout stops priming
-        (matching the previous behaviour) without aborting ``start()``.
-        """
-        revision = self._active_revision()
-        if revision is None:
-            logger.info(
-                "No active TCX protocol revision available; skipping initial "
-                "snapshot priming (cannot address parameters by wire id "
-                "without a negotiated revision). Live notifications will "
-                "populate the snapshot as they arrive."
-            )
-            return
-        logger.info(
-            "Priming TCX snapshot profile-aware (BikeParameter -> wire id) "
-            "for %s revision 0x%02x",
-            revision.generation.name,
-            revision.revision,
-        )
-        for param in TCX_POLL_PARAMS:
-            try:
-                await self._conn.request_tcx_parameter(param)
-            except UnmappedParameterError:
-                logger.debug(
-                    "No wire id for %s on %s revision 0x%02x; skipping prime",
-                    param.name,
-                    revision.generation.name,
-                    revision.revision,
-                )
-                continue
-            except TCXRequestTimeoutError:
-                logger.warning(
-                    "Timed out while priming TCX telemetry at parameter %s",
-                    param.name,
-                )
-                break
-
 
 async def run_telemetry_session(
     address: str,
@@ -325,15 +280,19 @@ async def run_telemetry_session(
     handshake can run; a TCU1 bike needs neither -- pass
     ``generation=BLEProfile.TCU1``. Example::
 
-        # TCX2+ (identified) session
+        # TCX2+ (identified) session; pairing is backend-managed.
         await run_telemetry_session(
-            "DC:DD:BB:4A:D6:55", pin="946166", bike_info=info, key=key
+            "DC:DD:BB:4A:D6:55", bike_info=info, key=key
         )
 
         # TCU1 session
         await run_telemetry_session(
-            "DC:DD:BB:4A:D6:55", pin="946166", generation=BLEProfile.TCU1
+            "DC:DD:BB:4A:D6:55", generation=BLEProfile.TCU1
         )
+
+    *pin* is retained for compatibility but deprecated. Bleak cannot consume a
+    passkey value directly; the active Bluetooth backend or agent handles
+    passkey entry.
     """
     printer = output_callback or print
 

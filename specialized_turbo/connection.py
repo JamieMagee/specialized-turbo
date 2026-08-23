@@ -9,8 +9,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import warnings
-from collections.abc import Callable
-from typing import Self
+from collections.abc import Awaitable, Callable
+from typing import Self, TypeAlias
 
 from bleak import BleakClient, BleakError, BleakScanner
 from bleak.backends.device import BLEDevice
@@ -18,6 +18,7 @@ from bleak.backends.scanner import AdvertisementData
 from bleak.backends.service import BleakGATTServiceCollection
 
 from .bike_info import BikeInfo, parse_bike_info
+from .coordinator_helpers import poll_tcu1, poll_tcx
 from .identification import (
     IdentificationResult,
     TCXIdentification,
@@ -31,6 +32,7 @@ from .key_provider import (
     resolve_bike_key,
 )
 from .keystore.models import BikeEncryptionKey
+from .models import TelemetrySnapshot
 from .parameters import BikeParameter
 from .protocol import (
     CHAR_NOTIFY,
@@ -60,6 +62,24 @@ from .transport import (
 from .wire_profiles import ProtocolRevision
 
 logger = logging.getLogger(__name__)
+
+BleakClientFactory: TypeAlias = Callable[
+    [str | BLEDevice, Callable[[BleakClient], None] | None],
+    Awaitable[BleakClient],
+]
+
+
+async def _default_client_factory(
+    address_or_device: str | BLEDevice,
+    disconnected_callback: Callable[[BleakClient], None] | None,
+) -> BleakClient:
+    """Create and connect the default Bleak client."""
+    client = BleakClient(
+        address_or_device,
+        disconnected_callback=disconnected_callback,
+    )
+    await client.connect()
+    return client
 
 
 def detect_ble_profile_from_services(
@@ -271,7 +291,7 @@ class SpecializedConnection:
     revision. TCU1 bikes need neither. Usage::
 
         async with SpecializedConnection(
-            "DC:DD:BB:4A:D6:55", pin="946166", bike_info=info, key=key
+            "DC:DD:BB:4A:D6:55", bike_info=info, key=key
         ) as conn:
             await conn.subscribe_notifications(my_callback)
             await asyncio.sleep(30)
@@ -285,6 +305,7 @@ class SpecializedConnection:
         address_or_device: str | BLEDevice,
         *,
         pin: str | None = None,
+        auto_pair: bool = True,
         generation: BLEProfile = BLEProfile.TCX,
         advertisement: BikeAdvertisement | None = None,
         key_provider: EncryptionKeyProvider | None = None,
@@ -293,6 +314,7 @@ class SpecializedConnection:
         bike_info: BikeInfo | None = None,
         key: BikeEncryptionKey | None = None,
         disconnect_callback: Callable[[BleakClient], None] | None = None,
+        client_factory: BleakClientFactory | None = None,
         trace_callback: TraceCallback | None = None,
         identification_timeout: float | None = None,
     ) -> None:
@@ -302,8 +324,13 @@ class SpecializedConnection:
         address_or_device :
             BLE MAC address string or a ``BLEDevice`` from scanning.
         pin :
-            6-digit pairing PIN displayed on the bike's TCU.  Required for
-            pairing on first connection.
+            Deprecated compatibility argument. Bleak cannot accept a passkey
+            value programmatically; use *auto_pair* and the active backend's
+            pairing agent instead.
+        auto_pair :
+            Request authenticated pairing for bikes using the TURBOHMI UUID
+            family. Existing bonds are reused; unsupported backends continue
+            to protocol setup and surface any protected-access failure.
         generation :
             BLE UUID family (TCU1 or TCX). Determines which
             GATT UUIDs to use.  Defaults to TCX.
@@ -322,6 +349,11 @@ class SpecializedConnection:
             :class:`~specialized_turbo.keystore.models.BikeEncryptionKey`.
         disconnect_callback :
             Optional callback invoked if the bike disconnects unexpectedly.
+        client_factory :
+            Optional async factory returning an already-connected
+            :class:`bleak.BleakClient`. Home Assistant uses this to inject
+            ``bleak_retry_connector`` while the library keeps ownership of the
+            bike protocol lifecycle.
         trace_callback :
             Optional callback receiving every raw TCX write and notification.
         identification_timeout :
@@ -334,8 +366,15 @@ class SpecializedConnection:
             raise ValueError(
                 "key is mutually exclusive with key_provider and wrapped_key"
             )
+        if pin is not None:
+            warnings.warn(
+                "pin is deprecated because Bleak cannot consume passkey values; "
+                "use auto_pair and configure the Bluetooth backend's pairing agent",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self._address = address_or_device
-        self._pin = pin
+        self._auto_pair = auto_pair
         self._generation = generation
         self._advertisement = advertisement
         self._key_provider = (
@@ -345,6 +384,7 @@ class SpecializedConnection:
         self._bike_info = bike_info
         self._key = key
         self._identification_timeout = identification_timeout
+        self._client_factory = client_factory or _default_client_factory
         self._char_notify = ""
         self._char_request_read = ""
         self._char_request_write = ""
@@ -378,40 +418,15 @@ class SpecializedConnection:
             await self._prepare_tcx_context()
         logger.info("Connecting to %s ...", self._address)
 
-        self._client = BleakClient(
+        self._client = await self._client_factory(
             self._address,
-            disconnected_callback=self._on_disconnect,
+            self._on_disconnect,
         )
-        await self._client.connect()
         logger.info("BLE connected, is_connected=%s", self._client.is_connected)
         self._update_protocol_from_services()
 
-        # Attempt explicit pairing if a PIN was provided
-        if self._pin is not None:
-            # A protected characteristic access prompts WinRT for passkey entry.
-            try:
-                logger.debug("Triggering pairing by reading CHAR_NOTIFY ...")
-                await self._client.read_gatt_char(self._char_notify)
-            except (BleakError, TimeoutError) as exc:
-                logger.debug(
-                    "Initial read raised %s (expected during pairing): %s",
-                    type(exc).__name__,
-                    exc,
-                )
-            try:
-                logger.info("Requesting pairing with PIN %s ...", self._pin)
-                await self._client.pair(
-                    protection_level=2
-                )  # 2 = EncryptionAndAuthentication
-                logger.info("Pairing completed")
-            except NotImplementedError:
-                logger.warning(
-                    "bleak backend does not support programmatic pairing. "
-                    "Please pair via your OS Bluetooth settings with PIN %s.",
-                    self._pin,
-                )
-            except (BleakError, TimeoutError) as exc:
-                logger.warning("Pairing raised %s: %s", type(exc).__name__, exc)
+        if self._generation == BLEProfile.TCX and self._auto_pair:
+            await self._pair_if_supported()
 
         # Create protocol session
         if self._uses_modern_tcx:
@@ -478,6 +493,25 @@ class SpecializedConnection:
         )
         if self._uses_tcx1:
             logger.info("Detected legacy TCX1 write-read service structure")
+
+    async def _pair_if_supported(self) -> None:
+        """Request backend-managed authenticated pairing without a stored PIN."""
+        assert self._client is not None
+        try:
+            await self._client.pair(protection_level=2)
+        except NotImplementedError:
+            logger.info(
+                "Bluetooth backend does not support programmatic pairing; "
+                "using any existing OS-level bond"
+            )
+        except (BleakError, TimeoutError) as exc:
+            logger.warning(
+                "Bluetooth pairing did not complete (%s): %s",
+                type(exc).__name__,
+                exc,
+            )
+        else:
+            logger.info("Bluetooth pairing completed")
 
     async def _prepare_tcx_context(self) -> None:
         if self._bike_info is None and self._advertisement is not None:
@@ -647,6 +681,11 @@ class SpecializedConnection:
         """
         return self._identification_result
 
+    @property
+    def uses_tcx1(self) -> bool:
+        """Return whether the connected bike uses legacy TCX1 transport."""
+        return self._uses_tcx1
+
     # -- notifications ----------------------------------------------------
 
     async def subscribe_notifications(
@@ -726,6 +765,23 @@ class SpecializedConnection:
                 msg.channel,
             )
         return msg
+
+    async def poll_telemetry(self, snapshot: TelemetrySnapshot) -> bool:
+        """Poll all supported fields into *snapshot* for the active protocol."""
+        if self._client is None:
+            raise RuntimeError("Not connected")
+        if self._uses_modern_tcx:
+            transport = self._tcx_transport
+            revision = self._protocol_revision
+            if transport is None or revision is None:
+                raise RuntimeError("TCX identification has not completed")
+            return await poll_tcx(transport, snapshot, revision)
+        return await poll_tcu1(
+            self._client,
+            self._char_request_write,
+            self._char_request_read,
+            snapshot,
+        )
 
     async def request_tcx_value(self, param_id: int) -> ParsedMessage:
         """

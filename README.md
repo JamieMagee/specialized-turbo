@@ -26,7 +26,7 @@ from specialized_turbo import SpecializedConnection, TelemetryMonitor
 
 
 async def main():
-    async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
+    async with SpecializedConnection("DC:DD:BB:4A:D6:55") as conn:
         monitor = TelemetryMonitor(conn)
         await monitor.start()
 
@@ -48,7 +48,6 @@ async with SpecializedCloudClient() as cloud:
     await cloud.login("rider@example.com", password)
     async with SpecializedConnection(
         "DC:DD:BB:4A:D6:55",
-        pin="946166",
         key_provider=cloud,
     ) as conn:
         ...
@@ -65,7 +64,7 @@ per-bike wrapped key.
 ### Read the snapshot
 
 ```python
-async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
+async with SpecializedConnection("DC:DD:BB:4A:D6:55") as conn:
     monitor = TelemetryMonitor(conn)
     await monitor.start()
     await asyncio.sleep(5)
@@ -85,7 +84,7 @@ async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
 ```python
 from specialized_turbo import SpecializedConnection, Sender, BatteryChannel
 
-async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
+async with SpecializedConnection("DC:DD:BB:4A:D6:55") as conn:
     msg = await conn.request_value(Sender.BATTERY, BatteryChannel.CHARGE_PERCENT)
     print(f"Battery: {msg.converted_value}%")
 ```
@@ -93,7 +92,7 @@ async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
 ### Write commands
 
 ```python
-async with SpecializedConnection("DC:DD:BB:4A:D6:55", pin="946166") as conn:
+async with SpecializedConnection("DC:DD:BB:4A:D6:55") as conn:
     await conn.set_assist_level(2)  # TRAIL
     await conn.set_acceleration(50.0)  # 50%
     await conn.set_shuttle(25)
@@ -134,33 +133,32 @@ unwrapped AES key.
 Stream telemetry:
 
 ```bash
-specialized-turbo telemetry DC:DD:BB:4A:D6:55 --pin 946166
 specialized-turbo telemetry DC:DD:BB:4A:D6:55 --email rider@example.com
 specialized-turbo telemetry DC:DD:BB:4A:D6:55 --wrapped-key "$WRAPPED_KEY"
-specialized-turbo telemetry DC:DD:BB:4A:D6:55 --pin 946166 --format json
-specialized-turbo telemetry DC:DD:BB:4A:D6:55 --pin 946166 --duration 30
+specialized-turbo telemetry DC:DD:BB:4A:D6:55 --format json
+specialized-turbo telemetry DC:DD:BB:4A:D6:55 --duration 30
 ```
 
 Read a single value:
 
 ```bash
 specialized-turbo read list                                             # show available fields
-specialized-turbo read battery_charge_percent DC:DD:BB:4A:D6:55 --pin 946166
-specialized-turbo read speed DC:DD:BB:4A:D6:55 --pin 946166 --format json
+specialized-turbo read battery_charge_percent DC:DD:BB:4A:D6:55
+specialized-turbo read speed DC:DD:BB:4A:D6:55 --format json
 ```
 
 Write a value:
 
 ```bash
 specialized-turbo write list                                            # show writable fields
-specialized-turbo write assist_level 2 DC:DD:BB:4A:D6:55 --pin 946166  # set to TRAIL
-specialized-turbo write acceleration 50 DC:DD:BB:4A:D6:55 --pin 946166 # 50% sensitivity
+specialized-turbo write assist_level 2 DC:DD:BB:4A:D6:55  # set to TRAIL
+specialized-turbo write acceleration 50 DC:DD:BB:4A:D6:55 # 50% sensitivity
 ```
 
 Dump GATT services (debugging):
 
 ```bash
-specialized-turbo services DC:DD:BB:4A:D6:55 --pin 946166
+specialized-turbo services DC:DD:BB:4A:D6:55
 ```
 
 Capture complete TCX writes and notifications for protocol debugging:
@@ -224,11 +222,14 @@ See [docs/protocol.md](docs/protocol.md) for the full spec.
 
 ## Pairing
 
-The bike needs a 6-digit PIN for BLE pairing, shown on its TCU screen. Pass it via `--pin` (CLI) or `pin=` (Python).
+The connection requests authenticated pairing for bikes using the TURBOHMI
+UUID family. Passkey entry and numeric comparison are handled by the active
+Bluetooth backend or its pairing agent; Bleak cannot accept a passkey value
+directly.
 
-On Windows, bleak's WinRT backend can handle passkey pairing programmatically. If that doesn't work, pair through Windows Bluetooth Settings first, then connect without `--pin`.
-
-Some newer bikes use numeric comparison instead of passkey entry. On those, pair through your OS Bluetooth settings first.
+If the backend cannot present or confirm the pairing prompt, pair through the
+operating system first and reconnect. The deprecated `--pin` and `pin=`
+arguments are accepted for compatibility but their values are ignored.
 
 ## Development
 

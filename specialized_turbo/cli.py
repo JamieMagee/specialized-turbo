@@ -50,6 +50,14 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
+def _warn_deprecated_pin(args: argparse.Namespace) -> None:
+    if getattr(args, "pin", None) is not None:
+        logging.getLogger(__name__).warning(
+            "--pin is deprecated and its value is ignored; pairing is handled "
+            "by the active Bluetooth backend"
+        )
+
+
 @asynccontextmanager
 async def _key_provider(
     args: argparse.Namespace,
@@ -81,11 +89,11 @@ async def _connection(
     *,
     trace_callback: TraceCallback | None = None,
 ) -> AsyncIterator[SpecializedConnection]:
+    _warn_deprecated_pin(args)
     async with (
         _key_provider(args) as provider,
         SpecializedConnection(
             args.address,
-            pin=args.pin,
             key_provider=provider,
             wrapped_key=getattr(args, "wrapped_key", None),
             trace_callback=trace_callback,
@@ -219,11 +227,11 @@ async def _cmd_fetch_key(args: argparse.Namespace) -> None:
 async def _cmd_telemetry(args: argparse.Namespace) -> None:
     """Connect and stream live telemetry."""
     print(f"Connecting to {args.address} ...")
+    _warn_deprecated_pin(args)
 
     async with _key_provider(args) as provider:
         snapshot = await run_telemetry_session(
             args.address,
-            pin=args.pin,
             duration=args.duration,
             output_format=args.format,
             key_provider=provider,
@@ -410,6 +418,7 @@ async def _cmd_services(args: argparse.Namespace) -> None:
     from bleak.exc import BleakError
 
     print(f"Connecting to {args.address} ...")
+    _warn_deprecated_pin(args)
     async with BleakClient(args.address) as client:
         if args.pin is not None:
             try:
@@ -520,7 +529,13 @@ def main(argv: list[str] | None = None) -> None:
     # --- telemetry ---
     p_tel = sub.add_parser("telemetry", help="Stream live telemetry")
     p_tel.add_argument("address", help="BLE MAC address (e.g. DC:DD:BB:4A:D6:55)")
-    p_tel.add_argument("-p", "--pin", type=str, default=None, help="Pairing PIN")
+    p_tel.add_argument(
+        "-p",
+        "--pin",
+        type=str,
+        default=None,
+        help="Deprecated; pairing is handled by the Bluetooth backend",
+    )
     _add_key_arguments(p_tel)
     p_tel.add_argument(
         "-d",
@@ -537,14 +552,26 @@ def main(argv: list[str] | None = None) -> None:
     )
     p_read.add_argument("field", help="Field name or 'list'")
     p_read.add_argument("address", nargs="?", default=None, help="BLE MAC address")
-    p_read.add_argument("-p", "--pin", type=str, default=None, help="Pairing PIN")
+    p_read.add_argument(
+        "-p",
+        "--pin",
+        type=str,
+        default=None,
+        help="Deprecated; pairing is handled by the Bluetooth backend",
+    )
     _add_key_arguments(p_read)
     p_read.add_argument("-f", "--format", choices=["table", "json"], default="table")
 
     # --- services ---
     p_svc = sub.add_parser("services", help="Enumerate GATT services (debug)")
     p_svc.add_argument("address", help="BLE MAC address")
-    p_svc.add_argument("-p", "--pin", type=str, default=None, help="Pairing PIN")
+    p_svc.add_argument(
+        "-p",
+        "--pin",
+        type=str,
+        default=None,
+        help="Deprecated; only triggers backend-managed pairing",
+    )
 
     # --- capture ---
     p_capture = sub.add_parser(
@@ -552,7 +579,13 @@ def main(argv: list[str] | None = None) -> None:
         help="Capture raw TCX writes and notifications",
     )
     p_capture.add_argument("address", help="BLE MAC address")
-    p_capture.add_argument("-p", "--pin", type=str, default=None, help="Pairing PIN")
+    p_capture.add_argument(
+        "-p",
+        "--pin",
+        type=str,
+        default=None,
+        help="Deprecated; pairing is handled by the Bluetooth backend",
+    )
     _add_key_arguments(p_capture)
     p_capture.add_argument(
         "-d",
@@ -570,7 +603,13 @@ def main(argv: list[str] | None = None) -> None:
     p_write.add_argument("field", help="Field name or 'list'")
     p_write.add_argument("value", nargs="?", default=None, help="Value to write")
     p_write.add_argument("address", nargs="?", default=None, help="BLE MAC address")
-    p_write.add_argument("-p", "--pin", type=str, default=None, help="Pairing PIN")
+    p_write.add_argument(
+        "-p",
+        "--pin",
+        type=str,
+        default=None,
+        help="Deprecated; pairing is handled by the Bluetooth backend",
+    )
     _add_key_arguments(p_write)
 
     args = parser.parse_args(argv)
