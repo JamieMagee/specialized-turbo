@@ -32,6 +32,7 @@ from specialized_turbo.bike_info import BikeInfo, parse_bike_info
 from specialized_turbo.connection import (
     SpecializedConnection,
     UnsupportedTCXOperationError,
+    scan_for_bikes,
 )
 from specialized_turbo.encryption import PRODUCTION_WRAPPING_KEY
 from specialized_turbo.framing import is_nak_packet
@@ -501,6 +502,38 @@ async def test_scan_builds_bike_info_for_key_lookup(
 
     assert connection._bike_info == info
     assert connection._key == BikeEncryptionKey(raw=KEY_RAW)
+
+
+async def test_scan_accepts_name_only_wsbc_advertisement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    device = cast(
+        BLEDevice,
+        SimpleNamespace(address="DC:DD:BB:4A:D6:55", name="WSBC025079419R"),
+    )
+    advertisement = AdvertisementData(
+        local_name="WSBC025079419R",
+        manufacturer_data={},
+        service_data={},
+        service_uuids=[],
+        tx_power=None,
+        rssi=-77,
+        platform_data=(),
+    )
+
+    class _FakeScanner:
+        def __init__(self, detection_callback: Callable[..., None]) -> None:
+            self._detection_callback = detection_callback
+
+        async def start(self) -> None:
+            self._detection_callback(device, advertisement)
+
+        async def stop(self) -> None:
+            return
+
+    monkeypatch.setattr(connection_module, "BleakScanner", _FakeScanner)
+
+    assert await scan_for_bikes(timeout=0) == [(device, advertisement)]
 
 
 @pytest.mark.asyncio

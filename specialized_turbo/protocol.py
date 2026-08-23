@@ -217,6 +217,14 @@ _TCX_SERVICE_UUIDS = {
 }
 
 
+def _has_specialized_name(local_name: str | None) -> bool:
+    """Return whether *local_name* matches the official app's bike-name pattern."""
+    return (
+        isinstance(local_name, str)
+        and _SPECIALIZED_NAME_PATTERN.fullmatch(local_name) is not None
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class BikeAdvertisement:
     """Protocol metadata decoded from BLE manufacturer data."""
@@ -545,9 +553,12 @@ def is_specialized_advertisement(
     """
     Check if BLE manufacturer data belongs to a Specialized Turbo bike.
 
-    Detects both TCX (Nordic company ID + TURBOHMI magic) and
-    TCU1 (Simplo Technology company ID) bikes.
+    Detects official Specialized local names, TCX manufacturer data, and TCU1
+    Simplo manufacturer data. A name-only match identifies a bike but does not
+    imply a protocol generation.
     """
+    if _has_specialized_name(local_name):
+        return True
     return (
         parse_bike_advertisement(
             manufacturer_data,
@@ -567,10 +578,7 @@ def parse_bike_advertisement(
     """Decode Specialized protocol metadata from BLE manufacturer data."""
     nordic_payload = manufacturer_data.get(NORDIC_COMPANY_ID)
     if nordic_payload is not None:
-        has_specialized_identity = (
-            isinstance(local_name, str)
-            and _SPECIALIZED_NAME_PATTERN.fullmatch(local_name) is not None
-        ) or any(
+        has_specialized_identity = _has_specialized_name(local_name) or any(
             isinstance(uuid, str) and uuid.lower() in _TCX_SERVICE_UUIDS
             for uuid in service_uuids or ()
         )

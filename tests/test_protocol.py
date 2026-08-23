@@ -563,6 +563,29 @@ class TestAdvertising:
     def test_rejects_empty(self):
         assert is_specialized_advertisement({}) is False
 
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "WSBC025079419R",
+            "WSBC001057439S",
+            "SPECIALIZED",
+            "SPECIALIZED LEVO",
+        ],
+    )
+    def test_detects_official_name_without_manufacturer_data(self, name: str):
+        assert is_specialized_advertisement({}, local_name=name) is True
+
+    def test_name_only_detection_does_not_guess_generation(self):
+        assert detect_generation({}, local_name="WSBC025079419R") is None
+        assert parse_bike_advertisement({}, local_name="WSBC025079419R") is None
+
+    @pytest.mark.parametrize(
+        "name",
+        ["WSBC", "WSBC1234567890R", "OTHER025079419R", "Specialized Bicycle Shop"],
+    )
+    def test_rejects_non_matching_name_without_manufacturer_data(self, name: str):
+        assert is_specialized_advertisement({}, local_name=name) is False
+
 
 # ======================================================================
 # Request builder

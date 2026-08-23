@@ -90,7 +90,11 @@ async def scan_for_bikes(
     found: list[tuple[BLEDevice, AdvertisementData]] = []
 
     def _detection_callback(device: BLEDevice, adv: AdvertisementData) -> None:
-        if is_specialized_advertisement(adv.manufacturer_data) and not any(
+        if is_specialized_advertisement(
+            adv.manufacturer_data,
+            local_name=device.name or adv.local_name,
+            service_uuids=adv.service_uuids,
+        ) and not any(
             found_device.address == device.address for found_device, _ in found
         ):
             logger.info("Found Specialized bike: %s (%s)", device.name, device.address)

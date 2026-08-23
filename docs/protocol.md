@@ -21,7 +21,10 @@ Three communication patterns exist:
 
 ## BLE discovery
 
-All generations advertise with at least one of these manufacturer data payloads:
+Advertisements can be identified by manufacturer data or by the local name.
+The official app accepts names matching `SPECIALIZED...`, `WSBC` followed by
+3-9 digits and a letter, or the same serial form without the `WSBC` prefix.
+Some older bikes and Bluetooth proxies expose only this name.
 
 ### Nordic (company ID `0x0059`)
 
@@ -62,6 +65,11 @@ TCU1 bikes advertise with Simplo Technology's company ID. The device name is `"S
 ### Detection
 
 ```python
+is_bike = is_specialized_advertisement(
+    manufacturer_data,
+    local_name=advertised_name,
+    service_uuids=advertised_service_uuids,
+)
 advertisement = parse_bike_advertisement(
     manufacturer_data,
     local_name=advertised_name,
@@ -70,7 +78,11 @@ advertisement = parse_bike_advertisement(
 generation = advertisement.generation if advertisement else None
 ```
 
-The detection tells you TCU1 vs TCX. Telling TCX2 apart from TCX3 or TCX4 requires the identification handshake (section below).
+Name-only discovery deliberately leaves `generation` unknown. After
+connecting, inspect the GATT characteristic UUIDs to select TCU1 or TCX.
+Manufacturer-backed detection can select TCU1 versus TCX before connection.
+Telling TCX2 apart from TCX3 or TCX4 requires the identification handshake
+(section below).
 
 ---
 
