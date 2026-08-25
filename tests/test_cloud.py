@@ -129,3 +129,54 @@ async def test_rejects_malformed_keystore_response() -> None:
                 hmi_hardware="3.2.1",
                 hmi_serial="123456789",
             )
+
+
+def _raise_transport_error(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("offline", request=request)
+
+
+async def test_login_wraps_transport_error() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(_raise_transport_error)
+    ) as http:
+        cloud = SpecializedCloudClient(client=http)
+        with pytest.raises(CloudRequestError, match="login request failed"):
+            await cloud.login("rider@example.com", "secret")
+
+
+async def test_refresh_wraps_transport_error() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(_raise_transport_error)
+    ) as http:
+        cloud = SpecializedCloudClient(
+            client=http,
+            token=CloudToken(access_token="access", refresh_token="refresh"),
+            email="rider@example.com",
+        )
+        with pytest.raises(CloudRequestError, match="refresh request failed"):
+            await cloud.refresh()
+
+
+async def test_application_id_wraps_transport_error() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(_raise_transport_error)
+    ) as http:
+        cloud = SpecializedCloudClient(client=http)
+        with pytest.raises(CloudRequestError, match="Application ID request failed"):
+            await cloud.get_application_id()
+
+
+async def test_keystore_wraps_transport_error() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(_raise_transport_error)
+    ) as http:
+        cloud = SpecializedCloudClient(
+            client=http,
+            token=CloudToken(access_token="access"),
+            application_id="application-id",
+        )
+        with pytest.raises(CloudRequestError, match="keystore request failed"):
+            await cloud.get_wrapped_key(
+                hmi_hardware="3.2.1",
+                hmi_serial="123456789",
+            )

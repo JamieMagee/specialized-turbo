@@ -81,11 +81,14 @@ class SpecializedCloudClient:
 
     async def login(self, email: str, password: str) -> CloudToken:
         """Authenticate with a Specialized account."""
-        response = await self._client.post(
-            f"{_AUTH_BASE_URL}/rest/auth/login",
-            headers=self._auth_api_headers(),
-            json={"username": email, "password": password, "accept": []},
-        )
+        try:
+            response = await self._client.post(
+                f"{_AUTH_BASE_URL}/rest/auth/login",
+                headers=self._auth_api_headers(),
+                json={"username": email, "password": password, "accept": []},
+            )
+        except httpx.RequestError as exc:
+            raise CloudRequestError("Specialized account login request failed") from exc
         if response.status_code in {401, 403}:
             raise CloudAuthenticationError("Specialized account login failed")
         self._raise_for_status(response, "Specialized account login failed")
@@ -100,11 +103,14 @@ class SpecializedCloudClient:
         if self._email is None or token is None or token.refresh_token is None:
             raise CloudAuthenticationError("No Specialized refresh token is available")
 
-        response = await self._client.post(
-            f"{_AUTH_BASE_URL}/rest/auth/refresh",
-            headers=self._auth_api_headers(),
-            json={"email": self._email, "refresh": token.refresh_token},
-        )
+        try:
+            response = await self._client.post(
+                f"{_AUTH_BASE_URL}/rest/auth/refresh",
+                headers=self._auth_api_headers(),
+                json={"email": self._email, "refresh": token.refresh_token},
+            )
+        except httpx.RequestError as exc:
+            raise CloudRequestError("Specialized token refresh request failed") from exc
         if response.status_code in {401, 403}:
             raise CloudAuthenticationError("Specialized token refresh failed")
         self._raise_for_status(response, "Specialized token refresh failed")
@@ -117,7 +123,10 @@ class SpecializedCloudClient:
         if self._application_id is not None:
             return self._application_id
 
-        response = await self._client.get(_APPLICATION_ID_URL)
+        try:
+            response = await self._client.get(_APPLICATION_ID_URL)
+        except httpx.RequestError as exc:
+            raise CloudRequestError("Application ID request failed") from exc
         self._raise_for_status(response, "Application ID request failed")
         uuid = self._response_json(response, "Application ID response").get("uuid")
         if not isinstance(uuid, str) or not uuid:
@@ -183,11 +192,14 @@ class SpecializedCloudClient:
         hmi_hardware: str,
         hmi_serial: str,
     ) -> httpx.Response:
-        return await self._client.get(
-            _KEYSTORE_URL,
-            params={"hmiHW": hmi_hardware, "hmiSN": hmi_serial},
-            headers=self._keystore_headers(access_token, application_id),
-        )
+        try:
+            return await self._client.get(
+                _KEYSTORE_URL,
+                params={"hmiHW": hmi_hardware, "hmiSN": hmi_serial},
+                headers=self._keystore_headers(access_token, application_id),
+            )
+        except httpx.RequestError as exc:
+            raise CloudRequestError("Specialized keystore request failed") from exc
 
     @staticmethod
     def _parse_token(response: httpx.Response) -> CloudToken:
