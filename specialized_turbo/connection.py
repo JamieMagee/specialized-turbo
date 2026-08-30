@@ -453,12 +453,14 @@ class SpecializedConnection:
                 self._protocol_revision = result.protocol_revision
                 self._identification_result = result
                 await transport.subscribe_for_realtime()
-            except Exception:
+            except Exception as exc:
                 logger.warning(
                     "TCX connect failed during identification/setup "
-                    "(failed_phase=%s, phase=%s)",
+                    "(failed_phase=%s, phase=%s, error=%s: %s)",
                     identification.failed_phase,
                     identification.phase,
+                    type(exc).__name__,
+                    exc,
                 )
                 await self._reset_after_failed_tcx_connect()
                 raise

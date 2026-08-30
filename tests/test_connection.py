@@ -684,6 +684,7 @@ async def test_scan_accepts_name_only_wsbc_advertisement(
 @pytest.mark.asyncio
 async def test_incomplete_bike_info_raises_cleanly(
     fake_bleak: type[_FakeBleakClient],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     connection = SpecializedConnection(
         "AA:BB:CC:DD:EE:FF",
@@ -695,6 +696,7 @@ async def test_incomplete_bike_info_raises_cleanly(
         await connection.connect()
 
     assert not connection.is_connected
+    assert "error=IncompleteBikeInfoError:" in caplog.text
 
 
 @pytest.mark.asyncio
