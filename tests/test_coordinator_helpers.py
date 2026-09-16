@@ -301,10 +301,20 @@ class TestPollTcx:
         assert snapshot.battery.charge_pct == 5
         assert snapshot.message_count > 0
 
-    async def test_decodes_native_packed_group_layouts(self) -> None:
+    @pytest.mark.parametrize(
+        ("generation", "revision"),
+        [
+            (TCXGeneration.TCX2, 0x12),
+            (TCXGeneration.TCX3, 0x25),
+            (TCXGeneration.TCX3, 0x26),
+        ],
+    )
+    async def test_decodes_native_packed_group_layouts(
+        self, generation: TCXGeneration, revision: int
+    ) -> None:
         client = _FakeClient()
         bike = _FakeBike(client)
-        rev = _revision()
+        rev = _revision(generation, revision)
         for param in TCX_POLL_PARAMS:
             bike.set_value(param, 0)
 

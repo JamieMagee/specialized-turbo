@@ -383,6 +383,28 @@ requests use the encrypted session. The HMI hardware family from the
 advertisement selects TCX2, TCX3, or TCX4; the negotiated BLE revision selects
 the exact wire profile.
 
+### TCX3 revisions 0x25 and 0x26
+
+Hardware version `A.6.3` belongs to the T3 family and uses TCX3.
+Android app 1.72.0 selects `ProtocolRx25TCX3` for revision bytes `0x25` and above.
+The library supports `0x25` and `0x26` with this table and keeps the reported
+revision in `ProtocolRevision`.
+
+The table changes 55 existing command IDs compared with revision `0x24`.
+The following commands illustrate changes that affect identification and sensors:
+
+| Parameter | Revision `0x24` | Revisions `0x25` and `0x26` |
+| --- | --- | --- |
+| `SYSTEM_MOTOR_TYPE` | `0x08D0` | `0x08C6` |
+| `SYSTEM_KCAL` | `0x08BA` | `0x08AD` |
+| `SYSTEM_RANGE_LONG` | `0x08B9` | `0x08AC` |
+| `SYSTEM_RANGE_SHORT` | `0x08B8` | `0x08AB` |
+| `SYSTEM_CONSUMPTION` | `0x08B6` | `0x08A9` |
+
+The existing telemetry fields keep their read-group IDs, byte positions, and
+scaling. The library does not assume that other unverified revisions use this
+table. Those revisions still raise `UnsupportedRevisionError`.
+
 ---
 
 ## TCX2+ telemetry fields

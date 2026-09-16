@@ -1,17 +1,27 @@
 """
 Generated TCX wire-ID and datatype mapping data.
 
-Source: Specialized Mission Control app v1.66.0, ``libturbo-core.so``
-(TurboConnectCore, C++, clang-19, arm64-v8a, full DWARF). Wire IDs were
-extracted from the native protocol constructors, then remapped by parameter
-name to the app v1.70.1 ``BikeParameter`` enum used by this library.
+DO NOT EDIT BY HAND.  Regenerate with:
 
-Within every protocol all wire IDs are unique. Spot values match official-app
-HCI traces, including ``SYSTEM_GET_NEW_VI=0x0A00``.
+    python scripts/generate_wire_profiles.py \
+        --wire-map <bikeparameter_wire_map.json> \
+        --datatypes <bikeparameter_datatypes.json>
+
+Source: Specialized app v1.66.0. TCX3 0x25/0x26 use the v1.72.0 Rx25 constructor.
+Wire IDs were extracted from arm64-v8a `libturbo-core.so` by disassembling
+each `ProtocolXxx` constructor's `ParameterInfo::ParameterInfo(...)` calls
+and reading the 16-bit id written immediately after each call. Validated:
+within every protocol all wire ids are unique; spot values match the
+official-app HCI trace (e.g. SYSTEM_GET_NEW_VI=0x0a00).
+
+Only `BikeParameter` values already defined in `parameters.py` are
+included. See `specialized_turbo.wire_profiles` for the public API that
+reads this data.
 """
 
 from __future__ import annotations
 
+# BikeParameter value -> known revision bytes, per TCXGeneration (2/3/4).
 KNOWN_REVISIONS: dict[int, tuple[int, ...]] = {
     2: (
         0x12,
@@ -65,18 +75,14 @@ KNOWN_REVISIONS: dict[int, tuple[int, ...]] = {
         0x22,
         0x23,
         0x24,
+        0x25,
+        0x26,
     ),
-    4: (
-        0x01,
-        0x02,
-        0x03,
-        0x04,
-        0x05,
-        0x06,
-        0x0A,
-    ),
+    4: (0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x0A),
 }
 
+# BikeParameter value -> {generation: wire id}, for generations where every
+# known protocol revision agrees on the same wire id.
 GENERATION_DEFAULTS: dict[int, dict[int, int]] = {
     0: {2: 0x05F7, 3: 0x05F7, 4: 0x05F7},
     1: {2: 0x05FC, 3: 0x05FC, 4: 0x05FC},
@@ -284,6 +290,9 @@ GENERATION_DEFAULTS: dict[int, dict[int, int]] = {
     413: {4: 0x081A},
 }
 
+# BikeParameter value -> {(generation, revision): wire id}, for revisions
+# whose wire id differs from other revisions of the same generation, or
+# where the parameter is only present on some revisions of that generation.
 REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
     10: {
         (2, 0x34): 0x050D,
@@ -306,6 +315,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x050D,
         (3, 0x23): 0x050D,
         (3, 0x24): 0x050D,
+        (3, 0x25): 0x050D,
+        (3, 0x26): 0x050D,
     },
     21: {
         (2, 0x29): 0x050A,
@@ -341,6 +352,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x060D,
         (3, 0x23): 0x060D,
         (3, 0x24): 0x060D,
+        (3, 0x25): 0x060D,
+        (3, 0x26): 0x060D,
     },
     58: {
         (4, 0x01): 0x0EFA,
@@ -399,6 +412,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x050C,
         (3, 0x23): 0x050C,
         (3, 0x24): 0x050C,
+        (3, 0x25): 0x050C,
+        (3, 0x26): 0x050C,
     },
     67: {
         (2, 0x34): 0x050B,
@@ -421,6 +436,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x050B,
         (3, 0x23): 0x050B,
         (3, 0x24): 0x050B,
+        (3, 0x25): 0x050B,
+        (3, 0x26): 0x050B,
     },
     70: {
         (3, 0x14): 0x05E5,
@@ -440,6 +457,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x05E5,
         (3, 0x23): 0x05E5,
         (3, 0x24): 0x05E5,
+        (3, 0x25): 0x05E5,
+        (3, 0x26): 0x05E5,
     },
     71: {
         (3, 0x14): 0x05E4,
@@ -459,6 +478,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x05E4,
         (3, 0x23): 0x05E4,
         (3, 0x24): 0x05E4,
+        (3, 0x25): 0x05E4,
+        (3, 0x26): 0x05E4,
     },
     72: {
         (3, 0x14): 0x05E3,
@@ -478,6 +499,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x05E3,
         (3, 0x23): 0x05E3,
         (3, 0x24): 0x05E3,
+        (3, 0x25): 0x05E3,
+        (3, 0x26): 0x05E3,
     },
     73: {
         (4, 0x01): 0x0EF3,
@@ -538,6 +561,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0818,
         (3, 0x23): 0x0818,
         (3, 0x24): 0x0818,
+        (3, 0x25): 0x0818,
+        (3, 0x26): 0x0818,
     },
     82: {
         (2, 0x13): 0x07DD,
@@ -588,6 +613,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07D7,
         (3, 0x23): 0x07D7,
         (3, 0x24): 0x07D7,
+        (3, 0x25): 0x07D7,
+        (3, 0x26): 0x07D7,
     },
     83: {
         (2, 0x13): 0x070F,
@@ -638,6 +665,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0713,
         (3, 0x23): 0x0713,
         (3, 0x24): 0x0713,
+        (3, 0x25): 0x0713,
+        (3, 0x26): 0x0713,
     },
     85: {
         (3, 0x08): 0x07CF,
@@ -663,6 +692,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07C7,
         (3, 0x23): 0x07C7,
         (3, 0x24): 0x07C7,
+        (3, 0x25): 0x07C7,
+        (3, 0x26): 0x07C7,
     },
     87: {
         (2, 0x12): 0x07DC,
@@ -714,6 +745,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07D6,
         (3, 0x23): 0x07D6,
         (3, 0x24): 0x07D6,
+        (3, 0x25): 0x07D6,
+        (3, 0x26): 0x07D6,
     },
     88: {
         (2, 0x12): 0x07DD,
@@ -764,6 +797,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07D4,
         (3, 0x23): 0x07D4,
         (3, 0x24): 0x07D4,
+        (3, 0x25): 0x07D4,
+        (3, 0x26): 0x07D4,
     },
     89: {
         (2, 0x12): 0x070F,
@@ -814,6 +849,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07D5,
         (3, 0x23): 0x07D5,
         (3, 0x24): 0x07D5,
+        (3, 0x25): 0x07D5,
+        (3, 0x26): 0x07D5,
     },
     90: {
         (2, 0x12): 0x07E2,
@@ -865,6 +902,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07DC,
         (3, 0x23): 0x07DC,
         (3, 0x24): 0x07DC,
+        (3, 0x25): 0x07DC,
+        (3, 0x26): 0x07DC,
     },
     91: {
         (2, 0x12): 0x07E3,
@@ -916,18 +955,32 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07DD,
         (3, 0x23): 0x07DD,
         (3, 0x24): 0x07DD,
+        (3, 0x25): 0x07DD,
+        (3, 0x26): 0x07DD,
+    },
+    93: {
+        (3, 0x25): 0x1103,
+        (3, 0x26): 0x1103,
     },
     94: {
         (3, 0x24): 0x1101,
+        (3, 0x25): 0x1101,
+        (3, 0x26): 0x1101,
     },
     95: {
         (3, 0x24): 0x11FE,
+        (3, 0x25): 0x11FE,
+        (3, 0x26): 0x11FE,
     },
     96: {
         (3, 0x24): 0x1102,
+        (3, 0x25): 0x1102,
+        (3, 0x26): 0x1102,
     },
     97: {
         (3, 0x24): 0x1100,
+        (3, 0x25): 0x1100,
+        (3, 0x26): 0x1100,
     },
     99: {
         (4, 0x05): 0x0B01,
@@ -1059,6 +1112,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0D00,
         (3, 0x23): 0x0D00,
         (3, 0x24): 0x0D00,
+        (3, 0x25): 0x0D00,
+        (3, 0x26): 0x0D00,
     },
     119: {
         (3, 0x1A): 0x081B,
@@ -1072,6 +1127,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x081B,
         (3, 0x23): 0x081B,
         (3, 0x24): 0x081B,
+        (3, 0x25): 0x081B,
+        (3, 0x26): 0x081B,
     },
     120: {
         (3, 0x1A): 0x08A3,
@@ -1085,6 +1142,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08A2,
         (3, 0x23): 0x08A2,
         (3, 0x24): 0x08A2,
+        (3, 0x25): 0x0895,
+        (3, 0x26): 0x0895,
         (4, 0x01): 0x089F,
         (4, 0x02): 0x089F,
         (4, 0x03): 0x089F,
@@ -1105,6 +1164,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08A1,
         (3, 0x23): 0x08A1,
         (3, 0x24): 0x08A1,
+        (3, 0x25): 0x0894,
+        (3, 0x26): 0x0894,
         (4, 0x01): 0x089E,
         (4, 0x02): 0x089E,
         (4, 0x03): 0x089E,
@@ -1125,6 +1186,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08A0,
         (3, 0x23): 0x08A0,
         (3, 0x24): 0x08A0,
+        (3, 0x25): 0x0893,
+        (3, 0x26): 0x0893,
         (4, 0x01): 0x089D,
         (4, 0x02): 0x089D,
         (4, 0x03): 0x089D,
@@ -1145,6 +1208,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x089F,
         (3, 0x23): 0x089F,
         (3, 0x24): 0x089F,
+        (3, 0x25): 0x0892,
+        (3, 0x26): 0x0892,
         (4, 0x01): 0x089C,
         (4, 0x02): 0x089C,
         (4, 0x03): 0x089C,
@@ -1165,6 +1230,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x089E,
         (3, 0x23): 0x089E,
         (3, 0x24): 0x089E,
+        (3, 0x25): 0x0891,
+        (3, 0x26): 0x0891,
         (4, 0x01): 0x089B,
         (4, 0x02): 0x089B,
         (4, 0x03): 0x089B,
@@ -1268,6 +1335,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0E02,
         (3, 0x23): 0x0E02,
         (3, 0x24): 0x0E02,
+        (3, 0x25): 0x0E02,
+        (3, 0x26): 0x0E02,
     },
     138: {
         (3, 0x0C): 0x0E03,
@@ -1290,6 +1359,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0E03,
         (3, 0x23): 0x0E03,
         (3, 0x24): 0x0E03,
+        (3, 0x25): 0x0E03,
+        (3, 0x26): 0x0E03,
     },
     139: {
         (3, 0x0C): 0x0E00,
@@ -1312,6 +1383,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0E00,
         (3, 0x23): 0x0E00,
         (3, 0x24): 0x0E00,
+        (3, 0x25): 0x0E00,
+        (3, 0x26): 0x0E00,
     },
     140: {
         (3, 0x06): 0x0711,
@@ -1367,6 +1440,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07E8,
         (3, 0x23): 0x07E8,
         (3, 0x24): 0x07E8,
+        (3, 0x25): 0x07E8,
+        (3, 0x26): 0x07E8,
     },
     163: {
         (3, 0x14): 0x07D2,
@@ -1386,6 +1461,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07CF,
         (3, 0x23): 0x07CF,
         (3, 0x24): 0x07CF,
+        (3, 0x25): 0x07CF,
+        (3, 0x26): 0x07CF,
     },
     164: {
         (3, 0x14): 0x07D3,
@@ -1405,6 +1482,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07D0,
         (3, 0x23): 0x07D0,
         (3, 0x24): 0x07D0,
+        (3, 0x25): 0x07D0,
+        (3, 0x26): 0x07D0,
     },
     165: {
         (3, 0x16): 0x07E5,
@@ -1422,6 +1501,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07E5,
         (3, 0x23): 0x07E5,
         (3, 0x24): 0x07E5,
+        (3, 0x25): 0x07E5,
+        (3, 0x26): 0x07E5,
     },
     166: {
         (3, 0x16): 0x07E4,
@@ -1439,6 +1520,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07E4,
         (3, 0x23): 0x07E4,
         (3, 0x24): 0x07E4,
+        (3, 0x25): 0x07E4,
+        (3, 0x26): 0x07E4,
     },
     167: {
         (3, 0x1B): 0x0716,
@@ -1451,6 +1534,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0716,
         (3, 0x23): 0x0716,
         (3, 0x24): 0x0716,
+        (3, 0x25): 0x0716,
+        (3, 0x26): 0x0716,
     },
     168: {
         (3, 0x1B): 0x0714,
@@ -1463,6 +1548,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0714,
         (3, 0x23): 0x0714,
         (3, 0x24): 0x0714,
+        (3, 0x25): 0x0714,
+        (3, 0x26): 0x0714,
     },
     170: {
         (3, 0x0C): 0x07E8,
@@ -1485,6 +1572,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07E6,
         (3, 0x23): 0x07E6,
         (3, 0x24): 0x07E6,
+        (3, 0x25): 0x07E6,
+        (3, 0x26): 0x07E6,
     },
     171: {
         (3, 0x16): 0x0714,
@@ -1512,6 +1601,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07D1,
         (3, 0x23): 0x07D1,
         (3, 0x24): 0x07D1,
+        (3, 0x25): 0x07D1,
+        (3, 0x26): 0x07D1,
     },
     173: {
         (3, 0x0E): 0x0711,
@@ -1532,6 +1623,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0711,
         (3, 0x23): 0x0711,
         (3, 0x24): 0x0711,
+        (3, 0x25): 0x0711,
+        (3, 0x26): 0x0711,
     },
     174: {
         (3, 0x0E): 0x0710,
@@ -1552,11 +1645,15 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0710,
         (3, 0x23): 0x0710,
         (3, 0x24): 0x0710,
+        (3, 0x25): 0x0710,
+        (3, 0x26): 0x0710,
     },
     175: {
         (3, 0x22): 0x07CE,
         (3, 0x23): 0x07CE,
         (3, 0x24): 0x07CE,
+        (3, 0x25): 0x07CE,
+        (3, 0x26): 0x07CE,
     },
     186: {
         (2, 0x26): 0x07E8,
@@ -1598,6 +1695,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07E7,
         (3, 0x23): 0x07E7,
         (3, 0x24): 0x07E7,
+        (3, 0x25): 0x07E7,
+        (3, 0x26): 0x07E7,
     },
     193: {
         (3, 0x14): 0x07EC,
@@ -1617,11 +1716,15 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07EC,
         (3, 0x23): 0x07EC,
         (3, 0x24): 0x07EC,
+        (3, 0x25): 0x07EC,
+        (3, 0x26): 0x07EC,
     },
     194: {
         (3, 0x22): 0x07EB,
         (3, 0x23): 0x07EB,
         (3, 0x24): 0x07EB,
+        (3, 0x25): 0x07EB,
+        (3, 0x26): 0x07EB,
     },
     199: {
         (2, 0x1F): 0x07D4,
@@ -1669,6 +1772,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07CA,
         (3, 0x23): 0x07CA,
         (3, 0x24): 0x07CA,
+        (3, 0x25): 0x07CA,
+        (3, 0x26): 0x07CA,
     },
     200: {
         (2, 0x1F): 0x0712,
@@ -1738,6 +1843,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07CC,
         (3, 0x23): 0x07CC,
         (3, 0x24): 0x07CC,
+        (3, 0x25): 0x07CC,
+        (3, 0x26): 0x07CC,
     },
     202: {
         (2, 0x1F): 0x07D5,
@@ -1785,6 +1892,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07CB,
         (3, 0x23): 0x07CB,
         (3, 0x24): 0x07CB,
+        (3, 0x25): 0x07CB,
+        (3, 0x26): 0x07CB,
     },
     203: {
         (2, 0x2F): 0x07D1,
@@ -1817,6 +1926,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07C9,
         (3, 0x23): 0x07C9,
         (3, 0x24): 0x07C9,
+        (3, 0x25): 0x07C9,
+        (3, 0x26): 0x07C9,
     },
     205: {
         (2, 0x12): 0x07E5,
@@ -1868,6 +1979,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07DF,
         (3, 0x23): 0x07DF,
         (3, 0x24): 0x07DF,
+        (3, 0x25): 0x07DF,
+        (3, 0x26): 0x07DF,
     },
     208: {
         (2, 0x12): 0x07E6,
@@ -1919,6 +2032,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x07E0,
         (3, 0x23): 0x07E0,
         (3, 0x24): 0x07E0,
+        (3, 0x25): 0x07E0,
+        (3, 0x26): 0x07E0,
     },
     210: {
         (2, 0x26): 0x0C03,
@@ -1979,10 +2094,14 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
     220: {
         (3, 0x23): 0x1009,
         (3, 0x24): 0x1009,
+        (3, 0x25): 0x1009,
+        (3, 0x26): 0x1009,
     },
     221: {
         (3, 0x23): 0x1008,
         (3, 0x24): 0x1008,
+        (3, 0x25): 0x1008,
+        (3, 0x26): 0x1008,
     },
     222: {
         (4, 0x02): 0x1001,
@@ -2032,6 +2151,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0F03,
         (3, 0x23): 0x0F03,
         (3, 0x24): 0x0F03,
+        (3, 0x25): 0x0F03,
+        (3, 0x26): 0x0F03,
     },
     228: {
         (3, 0x16): 0x0FFD,
@@ -2049,6 +2170,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0FFD,
         (3, 0x23): 0x0FFD,
         (3, 0x24): 0x0FFD,
+        (3, 0x25): 0x0FFD,
+        (3, 0x26): 0x0FFD,
     },
     229: {
         (3, 0x16): 0x0FF7,
@@ -2066,6 +2189,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0FF7,
         (3, 0x23): 0x0FF7,
         (3, 0x24): 0x0FF7,
+        (3, 0x25): 0x0FF7,
+        (3, 0x26): 0x0FF7,
     },
     230: {
         (3, 0x16): 0x0FF9,
@@ -2083,6 +2208,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0FF9,
         (3, 0x23): 0x0FF9,
         (3, 0x24): 0x0FF9,
+        (3, 0x25): 0x0FF9,
+        (3, 0x26): 0x0FF9,
     },
     231: {
         (3, 0x16): 0x0F04,
@@ -2100,6 +2227,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0F04,
         (3, 0x23): 0x0F04,
         (3, 0x24): 0x0F04,
+        (3, 0x25): 0x0F04,
+        (3, 0x26): 0x0F04,
     },
     232: {
         (3, 0x16): 0x0FFA,
@@ -2117,6 +2246,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0FFA,
         (3, 0x23): 0x0FFA,
         (3, 0x24): 0x0FFA,
+        (3, 0x25): 0x0FFA,
+        (3, 0x26): 0x0FFA,
     },
     233: {
         (3, 0x16): 0x0FF8,
@@ -2134,6 +2265,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0FF8,
         (3, 0x23): 0x0FF8,
         (3, 0x24): 0x0FF8,
+        (3, 0x25): 0x0FF8,
+        (3, 0x26): 0x0FF8,
     },
     234: {
         (3, 0x16): 0x0F02,
@@ -2151,6 +2284,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0F02,
         (3, 0x23): 0x0F02,
         (3, 0x24): 0x0F02,
+        (3, 0x25): 0x0F02,
+        (3, 0x26): 0x0F02,
     },
     235: {
         (3, 0x16): 0x0F00,
@@ -2168,6 +2303,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0F00,
         (3, 0x23): 0x0F00,
         (3, 0x24): 0x0F00,
+        (3, 0x25): 0x0F00,
+        (3, 0x26): 0x0F00,
     },
     236: {
         (3, 0x16): 0x0F01,
@@ -2185,20 +2322,28 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0F01,
         (3, 0x23): 0x0F01,
         (3, 0x24): 0x0F01,
+        (3, 0x25): 0x0F01,
+        (3, 0x26): 0x0F01,
     },
     237: {
+        (3, 0x25): 0x1200,
+        (3, 0x26): 0x1200,
         (4, 0x04): 0x1100,
         (4, 0x05): 0x1100,
         (4, 0x06): 0x1100,
         (4, 0x0A): 0x1100,
     },
     238: {
+        (3, 0x25): 0x12FF,
+        (3, 0x26): 0x12FF,
         (4, 0x04): 0x11FF,
         (4, 0x05): 0x11FF,
         (4, 0x06): 0x11FF,
         (4, 0x0A): 0x11FF,
     },
     239: {
+        (3, 0x25): 0x12FE,
+        (3, 0x26): 0x12FE,
         (4, 0x04): 0x11FE,
         (4, 0x05): 0x11FE,
         (4, 0x06): 0x11FE,
@@ -2254,6 +2399,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08DE,
         (3, 0x23): 0x08DE,
         (3, 0x24): 0x08DE,
+        (3, 0x25): 0x08D4,
+        (3, 0x26): 0x08D4,
         (4, 0x01): 0x08DB,
         (4, 0x02): 0x08DB,
         (4, 0x03): 0x08DB,
@@ -2312,6 +2459,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08BB,
         (3, 0x23): 0x08BB,
         (3, 0x24): 0x08BB,
+        (3, 0x25): 0x08AE,
+        (3, 0x26): 0x08AE,
         (4, 0x01): 0x08B8,
         (4, 0x02): 0x08B8,
         (4, 0x03): 0x08B8,
@@ -2370,6 +2519,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08D9,
         (3, 0x23): 0x08D9,
         (3, 0x24): 0x08D9,
+        (3, 0x25): 0x08CF,
+        (3, 0x26): 0x08CF,
         (4, 0x01): 0x08D6,
         (4, 0x02): 0x08D6,
         (4, 0x03): 0x08D6,
@@ -2425,6 +2576,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08DC,
         (3, 0x23): 0x08DC,
         (3, 0x24): 0x08DC,
+        (3, 0x25): 0x08D2,
+        (3, 0x26): 0x08D2,
         (4, 0x01): 0x08D9,
         (4, 0x02): 0x08D9,
         (4, 0x03): 0x08D9,
@@ -2483,6 +2636,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08CF,
         (3, 0x23): 0x08CF,
         (3, 0x24): 0x08CF,
+        (3, 0x25): 0x08C5,
+        (3, 0x26): 0x08C5,
         (4, 0x01): 0x08CC,
         (4, 0x02): 0x08CC,
         (4, 0x03): 0x08CC,
@@ -2541,6 +2696,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08E8,
         (3, 0x23): 0x08E8,
         (3, 0x24): 0x08E8,
+        (3, 0x25): 0x08DE,
+        (3, 0x26): 0x08DE,
         (4, 0x01): 0x08E5,
         (4, 0x02): 0x08E5,
         (4, 0x03): 0x08E5,
@@ -2594,6 +2751,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08B2,
         (3, 0x23): 0x08B2,
         (3, 0x24): 0x08B2,
+        (3, 0x25): 0x08A5,
+        (3, 0x26): 0x08A5,
         (4, 0x01): 0x08AF,
         (4, 0x02): 0x08AF,
         (4, 0x03): 0x08AF,
@@ -2697,6 +2856,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08E9,
         (3, 0x23): 0x08E9,
         (3, 0x24): 0x08E9,
+        (3, 0x25): 0x08DF,
+        (3, 0x26): 0x08DF,
         (4, 0x01): 0x08E6,
         (4, 0x02): 0x08E6,
         (4, 0x03): 0x08E6,
@@ -2755,6 +2916,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08D1,
         (3, 0x23): 0x08D1,
         (3, 0x24): 0x08D1,
+        (3, 0x25): 0x08C7,
+        (3, 0x26): 0x08C7,
         (4, 0x01): 0x08CE,
         (4, 0x02): 0x08CE,
         (4, 0x03): 0x08CE,
@@ -2819,6 +2982,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08F0,
         (3, 0x23): 0x08F0,
         (3, 0x24): 0x08F0,
+        (3, 0x25): 0x08E6,
+        (3, 0x26): 0x08E6,
         (4, 0x01): 0x08ED,
         (4, 0x02): 0x08ED,
         (4, 0x03): 0x08ED,
@@ -2860,6 +3025,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (2, 0x34): 0x08F6,
     },
     269: {
+        (3, 0x25): 0x081E,
+        (3, 0x26): 0x081E,
         (4, 0x0A): 0x081E,
     },
     272: {
@@ -2912,6 +3079,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08E7,
         (3, 0x23): 0x08E7,
         (3, 0x24): 0x08E7,
+        (3, 0x25): 0x08DD,
+        (3, 0x26): 0x08DD,
         (4, 0x01): 0x08E4,
         (4, 0x02): 0x08E4,
         (4, 0x03): 0x08E4,
@@ -2944,6 +3113,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0xF8C5,
         (3, 0x23): 0xF8C5,
         (3, 0x24): 0xF8C5,
+        (3, 0x25): 0xF8C5,
+        (3, 0x26): 0xF8C5,
     },
     274: {
         (3, 0x08): 0xF8C0,
@@ -2969,6 +3140,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0xF8C0,
         (3, 0x23): 0xF8C0,
         (3, 0x24): 0xF8C0,
+        (3, 0x25): 0xF8C0,
+        (3, 0x26): 0xF8C0,
     },
     275: {
         (3, 0x08): 0xF8C1,
@@ -2994,6 +3167,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0xF8C1,
         (3, 0x23): 0xF8C1,
         (3, 0x24): 0xF8C1,
+        (3, 0x25): 0xF8C1,
+        (3, 0x26): 0xF8C1,
     },
     276: {
         (3, 0x08): 0xF8C4,
@@ -3019,6 +3194,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0xF8C4,
         (3, 0x23): 0xF8C4,
         (3, 0x24): 0xF8C4,
+        (3, 0x25): 0xF8C4,
+        (3, 0x26): 0xF8C4,
     },
     277: {
         (3, 0x07): 0x08E1,
@@ -3045,6 +3222,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08DA,
         (3, 0x23): 0x08DA,
         (3, 0x24): 0x08DA,
+        (3, 0x25): 0x08D0,
+        (3, 0x26): 0x08D0,
         (4, 0x01): 0x08D7,
         (4, 0x02): 0x08D7,
         (4, 0x03): 0x08D7,
@@ -3107,6 +3286,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08B6,
         (3, 0x23): 0x08B6,
         (3, 0x24): 0x08B6,
+        (3, 0x25): 0x08A9,
+        (3, 0x26): 0x08A9,
         (4, 0x01): 0x08B3,
         (4, 0x02): 0x08B3,
         (4, 0x03): 0x08B3,
@@ -3229,6 +3410,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08D8,
         (3, 0x23): 0x08D8,
         (3, 0x24): 0x08D8,
+        (3, 0x25): 0x08CE,
+        (3, 0x26): 0x08CE,
         (4, 0x01): 0x08D5,
         (4, 0x02): 0x08D5,
         (4, 0x03): 0x08D5,
@@ -3287,6 +3470,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08EF,
         (3, 0x23): 0x08EF,
         (3, 0x24): 0x08EF,
+        (3, 0x25): 0x08E5,
+        (3, 0x26): 0x08E5,
         (4, 0x01): 0x08EC,
         (4, 0x02): 0x08EC,
         (4, 0x03): 0x08EC,
@@ -3345,6 +3530,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08EE,
         (3, 0x23): 0x08EE,
         (3, 0x24): 0x08EE,
+        (3, 0x25): 0x08E4,
+        (3, 0x26): 0x08E4,
         (4, 0x01): 0x08EB,
         (4, 0x02): 0x08EB,
         (4, 0x03): 0x08EB,
@@ -3403,6 +3590,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08ED,
         (3, 0x23): 0x08ED,
         (3, 0x24): 0x08ED,
+        (3, 0x25): 0x08E3,
+        (3, 0x26): 0x08E3,
         (4, 0x01): 0x08EA,
         (4, 0x02): 0x08EA,
         (4, 0x03): 0x08EA,
@@ -3461,6 +3650,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08CD,
         (3, 0x23): 0x08CD,
         (3, 0x24): 0x08CD,
+        (3, 0x25): 0x08C3,
+        (3, 0x26): 0x08C3,
         (4, 0x01): 0x08CA,
         (4, 0x02): 0x08CA,
         (4, 0x03): 0x08CA,
@@ -3545,6 +3736,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08EA,
         (3, 0x23): 0x08EA,
         (3, 0x24): 0x08EA,
+        (3, 0x25): 0x08E0,
+        (3, 0x26): 0x08E0,
         (4, 0x01): 0x08E7,
         (4, 0x02): 0x08E7,
         (4, 0x03): 0x08E7,
@@ -3575,6 +3768,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08C4,
         (3, 0x23): 0x08C4,
         (3, 0x24): 0x08C4,
+        (3, 0x25): 0x08B8,
+        (3, 0x26): 0x08B8,
         (4, 0x01): 0x08C1,
         (4, 0x02): 0x08C1,
         (4, 0x03): 0x08C1,
@@ -3696,6 +3891,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08CA,
         (3, 0x23): 0x08CA,
         (3, 0x24): 0x08CA,
+        (3, 0x25): 0x08BE,
+        (3, 0x26): 0x08BE,
         (4, 0x01): 0x08C7,
         (4, 0x02): 0x08C7,
         (4, 0x03): 0x08C7,
@@ -3751,6 +3948,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08E1,
         (3, 0x23): 0x08E1,
         (3, 0x24): 0x08E1,
+        (3, 0x25): 0x08D7,
+        (3, 0x26): 0x08D7,
         (4, 0x01): 0x08DE,
         (4, 0x02): 0x08DE,
         (4, 0x03): 0x08DE,
@@ -3809,6 +4008,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08DF,
         (3, 0x23): 0x08DF,
         (3, 0x24): 0x08DF,
+        (3, 0x25): 0x08D5,
+        (3, 0x26): 0x08D5,
         (4, 0x01): 0x08DC,
         (4, 0x02): 0x08DC,
         (4, 0x03): 0x08DC,
@@ -3844,6 +4045,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08EB,
         (3, 0x23): 0x08EB,
         (3, 0x24): 0x08EB,
+        (3, 0x25): 0x08E1,
+        (3, 0x26): 0x08E1,
         (4, 0x01): 0x08E8,
         (4, 0x02): 0x08E8,
         (4, 0x03): 0x08E8,
@@ -3902,6 +4105,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08BA,
         (3, 0x23): 0x08BA,
         (3, 0x24): 0x08BA,
+        (3, 0x25): 0x08AD,
+        (3, 0x26): 0x08AD,
         (4, 0x01): 0x08B7,
         (4, 0x02): 0x08B7,
         (4, 0x03): 0x08B7,
@@ -3954,6 +4159,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0802,
         (3, 0x23): 0x0802,
         (3, 0x24): 0x0802,
+        (3, 0x25): 0x0802,
+        (3, 0x26): 0x0802,
     },
     324: {
         (3, 0x0C): 0x08CD,
@@ -3993,6 +4200,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08E6,
         (3, 0x23): 0x08E6,
         (3, 0x24): 0x08E6,
+        (3, 0x25): 0x08DC,
+        (3, 0x26): 0x08DC,
         (4, 0x01): 0x08E3,
         (4, 0x02): 0x08E3,
         (4, 0x03): 0x08E3,
@@ -4051,6 +4260,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08D0,
         (3, 0x23): 0x08D0,
         (3, 0x24): 0x08D0,
+        (3, 0x25): 0x08C6,
+        (3, 0x26): 0x08C6,
         (4, 0x01): 0x08CD,
         (4, 0x02): 0x08CD,
         (4, 0x03): 0x08CD,
@@ -4139,6 +4350,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08D7,
         (3, 0x23): 0x08D7,
         (3, 0x24): 0x08D7,
+        (3, 0x25): 0x08CD,
+        (3, 0x26): 0x08CD,
         (4, 0x01): 0x08D4,
         (4, 0x02): 0x08D4,
         (4, 0x03): 0x08D4,
@@ -4197,6 +4410,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08E3,
         (3, 0x23): 0x08E3,
         (3, 0x24): 0x08E3,
+        (3, 0x25): 0x08D9,
+        (3, 0x26): 0x08D9,
         (4, 0x01): 0x08E0,
         (4, 0x02): 0x08E0,
         (4, 0x03): 0x08E0,
@@ -4239,6 +4454,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08E0,
         (3, 0x23): 0x08E0,
         (3, 0x24): 0x08E0,
+        (3, 0x25): 0x08D6,
+        (3, 0x26): 0x08D6,
         (4, 0x01): 0x08DD,
         (4, 0x02): 0x08DD,
         (4, 0x03): 0x08DD,
@@ -4281,6 +4498,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0803,
         (3, 0x23): 0x0803,
         (3, 0x24): 0x0803,
+        (3, 0x25): 0x0803,
+        (3, 0x26): 0x0803,
     },
     339: {
         (2, 0x12): 0x08E6,
@@ -4332,6 +4551,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08E4,
         (3, 0x23): 0x08E4,
         (3, 0x24): 0x08E4,
+        (3, 0x25): 0x08DA,
+        (3, 0x26): 0x08DA,
         (4, 0x01): 0x08E1,
         (4, 0x02): 0x08E1,
         (4, 0x03): 0x08E1,
@@ -4390,6 +4611,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08CE,
         (3, 0x23): 0x08CE,
         (3, 0x24): 0x08CE,
+        (3, 0x25): 0x08C4,
+        (3, 0x26): 0x08C4,
         (4, 0x01): 0x08CB,
         (4, 0x02): 0x08CB,
         (4, 0x03): 0x08CB,
@@ -4481,6 +4704,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08B9,
         (3, 0x23): 0x08B9,
         (3, 0x24): 0x08B9,
+        (3, 0x25): 0x08AC,
+        (3, 0x26): 0x08AC,
         (4, 0x01): 0x08B6,
         (4, 0x02): 0x08B6,
         (4, 0x03): 0x08B6,
@@ -4539,6 +4764,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08B8,
         (3, 0x23): 0x08B8,
         (3, 0x24): 0x08B8,
+        (3, 0x25): 0x08AB,
+        (3, 0x26): 0x08AB,
         (4, 0x01): 0x08B5,
         (4, 0x02): 0x08B5,
         (4, 0x03): 0x08B5,
@@ -4597,6 +4824,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08B7,
         (3, 0x23): 0x08B7,
         (3, 0x24): 0x08B7,
+        (3, 0x25): 0x08AA,
+        (3, 0x26): 0x08AA,
         (4, 0x01): 0x08B4,
         (4, 0x02): 0x08B4,
         (4, 0x03): 0x08B4,
@@ -4721,6 +4950,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08F3,
         (3, 0x23): 0x08F3,
         (3, 0x24): 0x08F3,
+        (3, 0x25): 0x08F3,
+        (3, 0x26): 0x08F3,
     },
     354: {
         (2, 0x25): 0x08F4,
@@ -4765,6 +4996,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08AF,
         (3, 0x23): 0x08AF,
         (3, 0x24): 0x08AF,
+        (3, 0x25): 0x08A2,
+        (3, 0x26): 0x08A2,
         (4, 0x01): 0x08AC,
         (4, 0x02): 0x08AC,
         (4, 0x03): 0x08AC,
@@ -4797,6 +5030,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08AE,
         (3, 0x23): 0x08AE,
         (3, 0x24): 0x08AE,
+        (3, 0x25): 0x08A1,
+        (3, 0x26): 0x08A1,
         (4, 0x01): 0x08AB,
         (4, 0x02): 0x08AB,
         (4, 0x03): 0x08AB,
@@ -4831,8 +5066,12 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0817,
         (3, 0x23): 0x0817,
         (3, 0x24): 0x0817,
+        (3, 0x25): 0x0817,
+        (3, 0x26): 0x0817,
     },
     362: {
+        (3, 0x25): 0x08C0,
+        (3, 0x26): 0x08C0,
         (4, 0x04): 0x08C7,
         (4, 0x05): 0x08C7,
         (4, 0x06): 0x08C6,
@@ -4888,6 +5127,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08D3,
         (3, 0x23): 0x08D3,
         (3, 0x24): 0x08D3,
+        (3, 0x25): 0x08C9,
+        (3, 0x26): 0x08C9,
         (4, 0x01): 0x08D0,
         (4, 0x02): 0x08D0,
         (4, 0x03): 0x08D0,
@@ -4958,6 +5199,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08C0,
         (3, 0x23): 0x08C0,
         (3, 0x24): 0x08C0,
+        (3, 0x25): 0x08B4,
+        (3, 0x26): 0x08B4,
         (4, 0x01): 0x08BD,
         (4, 0x02): 0x08BD,
         (4, 0x03): 0x08BD,
@@ -5016,6 +5259,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08C1,
         (3, 0x23): 0x08C1,
         (3, 0x24): 0x08C1,
+        (3, 0x25): 0x08B5,
+        (3, 0x26): 0x08B5,
         (4, 0x01): 0x08BE,
         (4, 0x02): 0x08BE,
         (4, 0x03): 0x08BE,
@@ -5089,6 +5334,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08C6,
         (3, 0x23): 0x08C6,
         (3, 0x24): 0x08C6,
+        (3, 0x25): 0x08BA,
+        (3, 0x26): 0x08BA,
         (4, 0x01): 0x08C3,
         (4, 0x02): 0x08C3,
         (4, 0x03): 0x08C3,
@@ -5118,6 +5365,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08E2,
         (3, 0x23): 0x08E2,
         (3, 0x24): 0x08E2,
+        (3, 0x25): 0x08D8,
+        (3, 0x26): 0x08D8,
         (4, 0x01): 0x08DF,
         (4, 0x02): 0x08DF,
         (4, 0x03): 0x08DF,
@@ -5201,6 +5450,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08D4,
         (3, 0x23): 0x08D4,
         (3, 0x24): 0x08D4,
+        (3, 0x25): 0x08CA,
+        (3, 0x26): 0x08CA,
         (4, 0x01): 0x08D1,
         (4, 0x02): 0x08D1,
         (4, 0x03): 0x08D1,
@@ -5227,6 +5478,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x0819,
         (3, 0x23): 0x0819,
         (3, 0x24): 0x0819,
+        (3, 0x25): 0x0819,
+        (3, 0x26): 0x0819,
     },
     410: {
         (3, 0x14): 0x08AC,
@@ -5246,6 +5499,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08AA,
         (3, 0x23): 0x08AA,
         (3, 0x24): 0x08AA,
+        (3, 0x25): 0x089D,
+        (3, 0x26): 0x089D,
         (4, 0x01): 0x08A7,
         (4, 0x02): 0x08A7,
         (4, 0x03): 0x08A7,
@@ -5272,6 +5527,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08A9,
         (3, 0x23): 0x08A9,
         (3, 0x24): 0x08A9,
+        (3, 0x25): 0x089C,
+        (3, 0x26): 0x089C,
         (4, 0x01): 0x08A6,
         (4, 0x02): 0x08A6,
         (4, 0x03): 0x08A6,
@@ -5298,6 +5555,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08A8,
         (3, 0x23): 0x08A8,
         (3, 0x24): 0x08A8,
+        (3, 0x25): 0x089B,
+        (3, 0x26): 0x089B,
         (4, 0x01): 0x08A5,
         (4, 0x02): 0x08A5,
         (4, 0x03): 0x08A5,
@@ -5324,6 +5583,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x081A,
         (3, 0x23): 0x081A,
         (3, 0x24): 0x081A,
+        (3, 0x25): 0x081A,
+        (3, 0x26): 0x081A,
     },
     414: {
         (3, 0x14): 0x08A8,
@@ -5343,6 +5604,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08A6,
         (3, 0x23): 0x08A6,
         (3, 0x24): 0x08A6,
+        (3, 0x25): 0x0899,
+        (3, 0x26): 0x0899,
         (4, 0x01): 0x08A3,
         (4, 0x02): 0x08A3,
         (4, 0x03): 0x08A3,
@@ -5369,6 +5632,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08A5,
         (3, 0x23): 0x08A5,
         (3, 0x24): 0x08A5,
+        (3, 0x25): 0x0898,
+        (3, 0x26): 0x0898,
         (4, 0x01): 0x08A2,
         (4, 0x02): 0x08A2,
         (4, 0x03): 0x08A2,
@@ -5395,6 +5660,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08A4,
         (3, 0x23): 0x08A4,
         (3, 0x24): 0x08A4,
+        (3, 0x25): 0x0897,
+        (3, 0x26): 0x0897,
         (4, 0x01): 0x08A1,
         (4, 0x02): 0x08A1,
         (4, 0x03): 0x08A1,
@@ -5426,6 +5693,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
         (3, 0x22): 0x08AC,
         (3, 0x23): 0x08AC,
         (3, 0x24): 0x08AC,
+        (3, 0x25): 0x089F,
+        (3, 0x26): 0x089F,
         (4, 0x01): 0x08A9,
         (4, 0x02): 0x08A9,
         (4, 0x03): 0x08A9,
@@ -5436,6 +5705,8 @@ REVISION_OVERRIDES: dict[int, dict[tuple[int, int], int]] = {
     },
 }
 
+# BikeParameter value -> {identification protocol key: wire id}. Keys match
+# `IdentificationProtocol.value` (ident_tcx2 / ident_base).
 IDENTIFICATION_WIRE_IDS: dict[int, dict[str, int]] = {
     14: {"ident_base": 0x0008},
     272: {"ident_base": 0x020A},
@@ -5447,6 +5718,7 @@ IDENTIFICATION_WIRE_IDS: dict[int, dict[str, int]] = {
     364: {"ident_base": 0x020B},
 }
 
+# BikeParameter value -> (datatype name, length in bytes, wire group id).
 DATATYPES: dict[int, tuple[str, int, int]] = {
     0: ("BOOL", 1, 0x0501),
     1: ("FLOAT", 1, 0x0500),

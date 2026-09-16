@@ -112,6 +112,54 @@ class TestRevisionSpecificMotorType:
         assert rev_12 != rev_1d
 
 
+class TestTcx3Rx25Mappings:
+    @pytest.mark.parametrize("revision", [0x25, 0x26])
+    @pytest.mark.parametrize(
+        ("parameter", "expected_wire"),
+        [
+            (BikeParameter.SYSTEM_MOTOR_TYPE, 0x08C6),
+            (BikeParameter.SYSTEM_BIKE_TYPE, 0x08DD),
+            (BikeParameter.SYSTEM_KCAL, 0x08AD),
+            (BikeParameter.SYSTEM_RANGE_LONG, 0x08AC),
+            (BikeParameter.SYSTEM_RANGE_SHORT, 0x08AB),
+            (BikeParameter.SYSTEM_RANGE_TREND, 0x08AA),
+            (BikeParameter.SYSTEM_CONSUMPTION, 0x08A9),
+            (BikeParameter.DROPPER_COUNT, 0x1103),
+            (BikeParameter.SYSTEM_SMARTJUNCTIONBOX_TYPE, 0x08C0),
+        ],
+    )
+    def test_app_172_command_ids(self, revision, parameter, expected_wire):
+        assert wire_id_for(parameter, TCXGeneration.TCX3, revision) == expected_wire
+        assert (
+            bike_parameter_for_wire_id(expected_wire, TCXGeneration.TCX3, revision)
+            == parameter
+        )
+
+    @pytest.mark.parametrize("revision", [0x25, 0x26])
+    def test_removed_parameter_has_no_older_revision_fallback(self, revision):
+        with pytest.raises(UnmappedParameterError):
+            wire_id_for(BikeParameter.SYSTEM_LOCK_TYPE, TCXGeneration.TCX3, revision)
+
+    @pytest.mark.parametrize("revision", [0x05, 0x27, 0x99])
+    def test_unverified_revisions_remain_unsupported(self, revision):
+        with pytest.raises(UnsupportedRevisionError):
+            ProtocolRevision(TCXGeneration.TCX3, revision)
+
+    def test_previous_revision_retains_its_map(self):
+        assert (
+            wire_id_for(BikeParameter.SYSTEM_MOTOR_TYPE, TCXGeneration.TCX3, 0x24)
+            == 0x08D0
+        )
+        assert (
+            wire_id_for(BikeParameter.SYSTEM_RANGE_LONG, TCXGeneration.TCX3, 0x24)
+            == 0x08B9
+        )
+        assert (
+            wire_id_for(BikeParameter.SYSTEM_LOCK_TYPE, TCXGeneration.TCX3, 0x24)
+            == 0x08CC
+        )
+
+
 class TestIdentificationWireIds:
     def test_get_new_vi_identification(self):
         assert identification_wire_id_for(BikeParameter.SYSTEM_GET_NEW_VI) == 0x0A00
@@ -180,18 +228,27 @@ class TestReverseLookup:
             wire_id = wire_id_for(param, TCXGeneration.TCX2)
             assert bike_parameter_for_wire_id(wire_id, TCXGeneration.TCX2) == param
 
-    def test_reverse_uniqueness_within_revision(self):
+    @pytest.mark.parametrize(
+        ("generation", "revision"),
+        [
+            (TCXGeneration.TCX2, 0x12),
+            (TCXGeneration.TCX3, 0x25),
+            (TCXGeneration.TCX3, 0x26),
+        ],
+    )
+    def test_reverse_uniqueness_within_revision(self, generation, revision):
         """No two BikeParameters may share a wire id within one generation/revision."""
         seen: dict[int, BikeParameter] = {}
         for param in BikeParameter:
             try:
-                wire_id = wire_id_for(param, TCXGeneration.TCX2, 0x12)
+                wire_id = wire_id_for(param, generation, revision)
             except UnmappedParameterError:
                 continue
             assert wire_id not in seen, (
                 f"{param.name} and {seen[wire_id].name} both map to "
-                f"0x{wire_id:04x} on TCX2 rev 0x12"
+                f"0x{wire_id:04x} on {generation.name} rev 0x{revision:02x}"
             )
+            assert bike_parameter_for_wire_id(wire_id, generation, revision) == param
             seen[wire_id] = param
         assert len(seen) > 50  # sanity: plenty of parameters were checked
 
@@ -313,6 +370,23 @@ class TestDatatypes:
 
 
 class TestGroupPayloads:
+    @pytest.mark.parametrize("revision", [0x25, 0x26])
+    @pytest.mark.parametrize(
+        ("parameter", "expected"),
+        [
+            (BikeParameter.SYSTEM_KCAL, "08adf401"),
+            (BikeParameter.SYSTEM_RANGE_LONG, "08ac2a00"),
+            (BikeParameter.SYSTEM_RANGE_SHORT, "08ab1200"),
+            (BikeParameter.SYSTEM_RANGE_TREND, "08aa02"),
+            (BikeParameter.SYSTEM_CONSUMPTION, "08a97b00"),
+        ],
+    )
+    def test_latest_tcx3_range_group_offsets(self, revision, parameter, expected):
+        payload = bytes.fromhex("0812d204002e1600f4012a001200027b0000")
+        assert extract_group_parameter_payload(
+            payload, parameter, TCXGeneration.TCX3, revision
+        ) == bytes.fromhex(expected)
+
     def test_extracts_field_by_native_offset(self):
         payload = bytes.fromhex("050038f40119af0a") + bytes(10)
 

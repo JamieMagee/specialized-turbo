@@ -168,9 +168,9 @@ def render(
     lines.append("        --wire-map <bikeparameter_wire_map.json> \\")
     lines.append("        --datatypes <bikeparameter_datatypes.json>")
     lines.append("")
-    lines.append(f"Source: {source_label}, `libturbo-core.so` (TurboConnectCore, C++,")
+    lines.append(f"Source: {source_label}.")
     lines.append(
-        "clang-19, arm64-v8a, full DWARF). Wire ids were extracted by disassembling"
+        "Wire IDs were extracted from arm64-v8a `libturbo-core.so` by disassembling"
     )
     lines.append(
         "each `ProtocolXxx` constructor's `ParameterInfo::ParameterInfo(...)` calls"

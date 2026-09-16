@@ -20,7 +20,7 @@ import pytest
 from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
-from specialized_turbo.bike_info import BikeInfo
+from specialized_turbo.bike_info import BikeInfo, parse_bike_info
 from specialized_turbo.encryption import is_encryptable
 from specialized_turbo.framing import pack_tcx
 from specialized_turbo.identification import (
@@ -380,6 +380,46 @@ class TestIVInstallation:
 
 
 class TestRevisionSelection:
+    @pytest.mark.parametrize("revision", [0x25, 0x26])
+    async def test_tcx3_identification_uses_verified_revision_map(self, revision: int):
+        """Use the reported A.6.3 advertisement with a synthetic serial and key."""
+        client = _FakeClient()
+        bike = _FakeBike(client)
+        bike_info = parse_bike_info(
+            "Test bike - Find My",
+            {0x0059: bytes.fromhex("00000000413633") + bytes([revision, 9, 1])},
+        )
+        bike.set_body(WIRE_GET_NEW_VI, IV)
+        if revision == 0x26:
+            bike.set_raw_frame(
+                WIRE_PROTOCOL_VERSION,
+                bytes.fromhex("0a01261c") + b"\x49" * 14 + bytes.fromhex("040c"),
+            )
+        else:
+            bike.set_body(WIRE_PROTOCOL_VERSION, bytes([revision, 0x1C]))
+        bike.set_body(0x0801, b"\x01")
+        bike.set_body(0x05F3, b"\x06\x0a\x35")
+        bike.set_body(0x0807, b"A.6.3")
+        bike.set_body(0x08C6, b"\x09")
+        bike.set_body(0x0804, b"TEST-BIKE-123456")
+        transport = _transport(client)
+
+        result = await identify(transport, bike_info, BikeEncryptionKey(raw=KEY_RAW))
+
+        assert bike.requests == [0x0A00, 0x0A01, 0x0801, 0x05F3, 0x0807, 0x08C6, 0x0804]
+        assert result.protocol_revision == ProtocolRevision(
+            TCXGeneration.TCX3, revision
+        )
+        assert result.ble_revision == revision
+        assert result.usb_revision == 0x1C
+        assert result.hmi_hardware_version == "A.6.3"
+        assert result.system_state == 1
+        assert result.battery_firmware == (6, 10, 53)
+        assert result.motor_type == 9
+        assert result.ebike_serial == "TEST-BIKE-123456"
+        assert result.encrypted
+        assert transport.protocol_revision == result.protocol_revision
+
     @pytest.mark.parametrize(
         "revision, expected_motor_wire",
         [(0x12, 0x08D2), (0x1D, 0x08D1)],
