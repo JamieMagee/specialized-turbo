@@ -15,7 +15,7 @@ import json
 import logging
 import sys
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from bleak.backends.characteristic import BleakGATTCharacteristic
@@ -61,7 +61,7 @@ def _warn_deprecated_pin(args: argparse.Namespace) -> None:
 @asynccontextmanager
 async def _key_provider(
     args: argparse.Namespace,
-) -> AsyncIterator[EncryptionKeyProvider | None]:
+) -> AsyncGenerator[EncryptionKeyProvider | None, None]:
     cloud = None
     if getattr(args, "email", None) is not None:
         try:
@@ -88,7 +88,7 @@ async def _connection(
     args: argparse.Namespace,
     *,
     trace_callback: TraceCallback | None = None,
-) -> AsyncIterator[SpecializedConnection]:
+) -> AsyncGenerator[SpecializedConnection, None]:
     _warn_deprecated_pin(args)
     async with (
         _key_provider(args) as provider,
